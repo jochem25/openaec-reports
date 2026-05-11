@@ -214,10 +214,18 @@ impl DocTemplate {
                             break;
                         }
                         crate::flowable::SplitResult::Fits => {
-                            // Shouldn't happen but handle gracefully
-                            flowable.draw(start_x, Pt(start_y.0 + cursor_y.0), &mut draw_list);
-                            cursor_y = Pt(cursor_y.0 + size.height.0);
-                            idx += 1;
+                            // Some splittable flowables (Paragraph) historically returned
+                            // Fits when space_before/space_after pushed wrapped_height
+                            // marginally over available — drawing here would overflow the
+                            // frame. Defend by pushing the flowable to the next page when
+                            // the current page already has content; only force-draw if we're
+                            // at the top of an empty page (otherwise we'd loop forever).
+                            if cursor_y.0 == 0.0 {
+                                flowable.draw(start_x, Pt(start_y.0 + cursor_y.0), &mut draw_list);
+                                cursor_y = Pt(cursor_y.0 + size.height.0);
+                                idx += 1;
+                            }
+                            break;
                         }
                     }
                 }

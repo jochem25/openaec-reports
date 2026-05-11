@@ -272,7 +272,13 @@ impl Flowable for Paragraph {
             return SplitResult::CannotSplit;
         }
         if lines_that_fit >= self.lines.len() {
-            return SplitResult::Fits;
+            // All lines fit width-wise, but we only got here because
+            // wrapped_height (which includes space_before + space_after)
+            // exceeds available. Returning Fits here would let the caller
+            // draw the paragraph at its declared size, overflowing the
+            // frame bottom by space_after. Push the whole paragraph to
+            // the next page instead.
+            return SplitResult::CannotSplit;
         }
 
         // Split at line boundary

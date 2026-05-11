@@ -89,8 +89,13 @@ impl Frame {
                 // Doesn't fit — try splitting
                 match flowable.split(inner_w, remaining_height, ctx) {
                     SplitResult::Fits => {
-                        flowable.draw(start_x, Pt(start_y.0 + cursor_y.0), draw_list);
-                        cursor_y = Pt(cursor_y.0 + size.height.0);
+                        // Mirror doc_template guard: split() claimed Fits even though
+                        // wrap returned size > remaining. Drawing here would overflow
+                        // the frame. Treat as Overflow so the caller starts a new frame.
+                        return FrameResult::Overflow {
+                            first_remaining: i,
+                            split_remainder: None,
+                        };
                     }
                     SplitResult::Split(mut first, second) => {
                         let first_size = first.wrap(inner_w, remaining_height, ctx);
