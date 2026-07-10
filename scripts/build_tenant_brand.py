@@ -124,22 +124,19 @@ def build_fonts(_typografie: dict[str, Any]) -> dict[str, str]:
     kba-brand.json geeft CSS font-stacks (bv. "'Segoe UI', Arial,
     sans-serif"), geen ReportLab-fontnamen. Die worden hier vast gemapt naar
     de bestandsstammen in de fonts-map, zodat renderer_v2's auto-register
-    (op bestandsnaam) ze oppikt. 'medium' (SegoeUI-Semilight) staat niet
-    expliciet in de JSON-typografie, maar is het enige beschikbare
-    tussengewicht-bestand.
+    (op bestandsnaam) ze oppikt.
 
-    BEKENDE AFWIJKING — ontbrekend gewicht: de referentie-PDF gebruikt in
-    de meta-kopjes en kickers CSS font-weight:600 (".meta .kop",
-    ".kicker"), wat browsers als "Segoe UI Semibold" synthetiseren. Er is
-    GEEN SegoeUI-Semibold.ttf in tenants/kba/fonts/, en ReportLab kan een
-    tussengewicht niet synthetiseren zoals een browser dat doet. Zonder dat
-    bestand vallen die elementen terug op SegoeUI-Bold (fonts.heading, te
-    zwaar) of SegoeUI (fonts.body, te licht). Niet stilzwijgend opgelost —
-    lever het .ttf-bestand aan, of accepteer de afwijking bewust.
+    'semibold' (SegoeUI-Semibold) dekt de CSS font-weight:600 uit de
+    referentie (".meta .kop", ".kicker", "footer strong"). Het .ttf komt uit
+    Windows (seguisb.ttf); het bestand leeft in tenants/kba/fonts/ maar niet
+    in git (tenants/* is gitignored), zodat de Segoe UI-licentiekwestie de
+    publieke repo niet raakt. 'medium' (SegoeUI-Semilight) blijft beschikbaar
+    als lichter tussengewicht maar wordt momenteel nergens gebruikt.
     """
     return {
         "heading": "SegoeUI-Bold",
         "body": "SegoeUI",
+        "semibold": "SegoeUI-Semibold",
         "medium": "SegoeUI-Semilight",
         "italic": "SegoeUI-Italic",
     }
