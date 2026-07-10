@@ -388,9 +388,16 @@ async def health():
     """Health check endpoint.
 
     Returns:
-        Status en versie-informatie.
+        Status, versie en build-marker. ``build`` bevat de git-commit die in
+        het image is gebakken (``OPENAEC_BUILD`` env, gezet bij ``docker build
+        --build-arg GIT_COMMIT=...``). Zo kan een consument objectief
+        verifiëren welke code draait i.p.v. op gedrag te moeten afgaan.
     """
-    return {"status": "ok", "version": __version__}
+    return {
+        "status": "ok",
+        "version": __version__,
+        "build": os.environ.get("OPENAEC_BUILD", "unknown"),
+    }
 
 
 @_protected.get("/api/templates")

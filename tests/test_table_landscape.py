@@ -14,7 +14,7 @@ import fitz
 TENANTS = Path(__file__).resolve().parent.parent / "tenants"
 
 
-def _render(orientation: str, out: Path) -> fitz.Document:
+def _render(orientation: str, out: Path, level: str = "section") -> fitz.Document:
     os.environ["OPENAEC_TENANTS_ROOT"] = str(TENANTS)
     os.environ["OPENAEC_TENANTS_DIR"] = str(TENANTS)
     from openaec_reports.core.renderer_v2 import ReportGeneratorV2
@@ -22,14 +22,19 @@ def _render(orientation: str, out: Path) -> fitz.Document:
     cols = ["Project", "Adres", "Concept", "Aangevraagd", "In behandeling",
             "Aanvulling", "Vergund", "Bezwaar", "Onherroepelijk", "Verleend"]
     rows = [["A", "Straat 1"] + ["n.v.t."] * 8]
+    table = {"type": "table", "title": "Status", "headers": cols, "rows": rows,
+             "column_widths": [14, 22] + [8] * 8}
     data = {
         "template": "standaard", "report_type": "T", "project": "P",
         "date": "2026-01-01", "version": "1.0", "status": "C", "client": "X",
         "cover": {"image": str(TENANTS / "kba" / "logos" / "kba.png")},
-        "sections": [{"title": "S", "orientation": orientation, "content": [
-            {"type": "table", "title": "Status", "headers": cols, "rows": rows,
-             "column_widths": [14, 22] + [8] * 8}]}],
     }
+    if level == "section":
+        data["sections"] = [{"title": "S", "orientation": orientation,
+                             "content": [table]}]
+    else:  # top-level document-oriëntatie (zoals ypsilon stuurt)
+        data["orientation"] = orientation
+        data["sections"] = [{"title": "S", "content": [table]}]
     ReportGeneratorV2(brand="kba", tenant_slug="kba").generate(
         data, TENANTS / "kba" / "stationery", out)
     return fitz.open(out)
@@ -55,6 +60,17 @@ def test_landscape_table_spans_wider_than_portrait_box(tmp_path):
     assert pw > 800, f"landscape-pagina moet ~842pt breed zijn, was {pw}"
     # Portret-vak liep tot ~541pt; landscape moet daar ruim overheen.
     assert right > 700, f"tabel te smal in landscape (rechterrand {right}pt)"
+    assert verleend_ok, "laatste kolom 'Verleend' valt buiten de pagina"
+
+
+def test_top_level_orientation_makes_document_landscape(tmp_path):
+    """Top-level ``orientation`` (zoals ypsilon stuurt) moet de content
+    landscape maken — voorheen stil genegeerd, waardoor de pagina portret
+    bleef en de tabel op de portret-cap (~538pt) hing."""
+    ls = _render("landscape", tmp_path / "top.pdf", level="document")
+    pw, right, verleend_ok = _table_right_edge(ls)
+    assert pw > 800, f"top-level orientation moet landscape geven, was {pw}pt"
+    assert right > 700, f"tabel te smal (rechterrand {right}pt)"
     assert verleend_ok, "laatste kolom 'Verleend' valt buiten de pagina"
 
 

@@ -38,6 +38,12 @@ ENV OPENAEC_TENANTS_ROOT=/app/tenants
 ENV OPENAEC_TENANT_DIR=/app/tenants/default
 ENV OPENAEC_DEFAULT_BRAND=default
 
+# Build-marker: bak de git-commit in het image zodat /api/health objectief
+# aangeeft welke code draait. Zet bij de build:
+#   docker build --build-arg GIT_COMMIT=$(git rev-parse --short HEAD) ...
+ARG GIT_COMMIT=unknown
+ENV OPENAEC_BUILD=${GIT_COMMIT}
+
 USER appuser
 
 EXPOSE 8000

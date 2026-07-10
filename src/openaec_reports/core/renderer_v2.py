@@ -3011,6 +3011,21 @@ class ReportGeneratorV2:
         if toc_enabled:
             renderer.current_page_nr += 1  # reserveer 1 pagina voor TOC
 
+        # Document-brede oriëntatie: een top-level ``orientation`` (of
+        # ``format`` met "landscape") maakt álle content-secties landscape,
+        # tenzij een sectie het zelf via ``section["orientation"]``
+        # overschrijft. Cover/colofon (portret-ontworpen) blijven portret.
+        # Zonder deze velden blijft alles portret → bestaande rapporten en de
+        # pixel-baseline ongewijzigd. (Voorheen werd oriëntatie ALLEEN
+        # per-sectie gelezen; een top-level veld werd stil genegeerd, waardoor
+        # een "landscape"-rapport toch portret bleef — gemeld door ypsilon.)
+        _doc_or = str(data.get("orientation") or "").lower()
+        _fmt = str(data.get("format") or "").lower()
+        if _doc_or == "landscape" or "landscape" in _fmt:
+            renderer._orientation = "landscape"
+        elif _doc_or == "portrait":
+            renderer._orientation = "portrait"
+
         # Sections
         for section in data.get("sections", []):
             renderer.render_section(section)
