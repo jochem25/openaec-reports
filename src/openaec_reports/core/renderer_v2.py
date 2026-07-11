@@ -641,6 +641,60 @@ class CoverGenerator:
             return self._generate_from_pdf(data, stationery, output)
         return self._generate_from_png(data, stationery, output)
 
+    @staticmethod
+    def _wrap_by_width(
+        text: str, max_w: float, width_of: "callable[[str], float]"
+    ) -> list[str]:
+        """Woordterugloop op basis van een breedte-meetfunctie.
+
+        ``width_of(s)`` geeft de renderbreedte van ``s`` in punten (canvas
+        ``stringWidth`` of fitz ``Font.text_length``). Een enkel woord dat op
+        zichzelf al te breed is blijft op een eigen regel staan (geen
+        karakter-afbreken — voor titels zeldzaam en beter dan een lelijke split).
+        """
+        lines: list[str] = []
+        current = ""
+        for word in text.split():
+            candidate = f"{current} {word}".strip()
+            if not current or width_of(candidate) <= max_w:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [text]
+
+    def _draw_cover_title(
+        self, c: "rl_canvas.Canvas", tf: dict, title_text: str,
+        color_hex: str, page_w: float,
+    ) -> float:
+        """Teken de cover-titel met woordterugloop, naar BENEDEN uitgelijnd.
+
+        De eerste regel blijft op de originele ``y_bl`` staan (de kicker zit er
+        vlak boven en mag niet geraakt worden); extra regels stapelen eronder in
+        de lege ruimte in het midden van de cover. Retourneert de ``shift`` (de
+        afstand die de laatste regel onder de originele ``y_bl`` uitkomt) zodat
+        de aanroeper de subtitel mee kan laten zakken. Een titel op één regel
+        levert exact de oude ``drawString`` op + shift 0 — de pixel-baseline
+        blijft gelijk. ``max_width`` en ``leading`` zijn per template
+        overschrijfbaar.
+        """
+        font = tf.get("font", "Inter-Bold")
+        size = tf.get("size", 28.9)
+        x = tf.get("x", 54.3)
+        y_bl = tf.get("y_bl", 120.5)
+        max_w = tf.get("max_width", max(50.0, page_w - 2 * x))
+        leading = tf.get("leading", size * 1.12)
+        c.setFont(font, size)
+        c.setFillColor(HexColor(color_hex))
+        lines = self._wrap_by_width(
+            title_text, max_w, lambda s: c.stringWidth(s, font, size)
+        )
+        for i, line in enumerate(lines):
+            c.drawString(x, y_bl - i * leading, line)
+        return (len(lines) - 1) * leading
+
     def _generate_from_pdf(self, data: dict, stationery_pdf: Path, output: Path) -> Path:
         """Cover via PyMuPDF: tekst op PDF stationery."""
         doc = fitz.open(str(stationery_pdf))
@@ -653,13 +707,26 @@ class CoverGenerator:
         # Rapport type
         tf = fields.get("rapport_type", {})
         title_text = data.get("report_type", "")
+        title_shift = 0.0
         if title_text:
             font_obj = self.fonts.get_fitz_font(tf.get("font", "LiberationSans-Bold"))
             size = tf.get("size", 28)
+            x = tf.get("x", 54)
             y_bl = tf.get("y_bl", tf.get("y", 93))
             y_td = page.rect.height - y_bl
+            # Woordterugloop, naar beneden uitgelijnd (eerste regel op y_bl;
+            # in top-down coords = grotere y_td). ``title_shift`` laat de
+            # subtitel mee zakken.
+            max_w = tf.get("max_width", max(50.0, page.rect.width - 2 * x))
+            leading = tf.get("leading", size * 1.12)
+            lines = self._wrap_by_width(
+                title_text, max_w, lambda s: font_obj.text_length(s, fontsize=size)
+            )
             tw = fitz.TextWriter(page.rect)
-            tw.append((tf.get("x", 54), y_td), title_text, font=font_obj, fontsize=size)
+            for i, line in enumerate(lines):
+                tw.append((x, y_td + i * leading), line,
+                          font=font_obj, fontsize=size)
+            title_shift = (len(lines) - 1) * leading
             color = self._color(tf, "color", "primary", "cover.rapport_type(pdf)")
             tw.write_text(page, color=_hex_to_rgb(color))
 
@@ -670,7 +737,7 @@ class CoverGenerator:
             font_obj = self.fonts.get_fitz_font(sf.get("font", "LiberationSans"))
             size = sf.get("size", 17)
             y_bl = sf.get("y_bl", sf.get("y", 63))
-            y_td = page.rect.height - y_bl
+            y_td = page.rect.height - y_bl + title_shift
             tw = fitz.TextWriter(page.rect)
             tw.append((sf.get("x", 55), y_td), subtitle_text, font=font_obj, fontsize=size)
             color = self._color(sf, "color", "secondary", "cover.project_naam(pdf)")
@@ -904,11 +971,10 @@ class CoverGenerator:
             fields = self.tpl.get("dynamic_fields", {})
             tf = fields.get("rapport_type", {})
             title_text = data.get("report_type", "")
+            title_shift = 0.0
             if title_text:
-                c.setFont(tf.get("font", "Inter-Bold"), tf.get("size", 28.9))
                 color = self._color(tf, "color", "primary", "cover.rapport_type(static)")
-                c.setFillColor(HexColor(color))
-                c.drawString(tf.get("x", 54.3), tf.get("y_bl", 120.5), title_text)
+                title_shift = self._draw_cover_title(c, tf, title_text, color, A4[0])
 
             sf = fields.get("project_naam", {})
             subtitle_text = data.get("project", "")
@@ -916,7 +982,7 @@ class CoverGenerator:
                 c.setFont(sf.get("font", "Inter-Regular"), sf.get("size", 17.8))
                 color = self._color(sf, "color", "secondary", "cover.project_naam(static)")
                 c.setFillColor(HexColor(color))
-                c.drawString(sf.get("x", 55.0), sf.get("y_bl", 78.6), subtitle_text)
+                c.drawString(sf.get("x", 55.0), sf.get("y_bl", 78.6) - title_shift, subtitle_text)
 
             c.save()
         finally:
@@ -980,11 +1046,10 @@ class CoverGenerator:
 
         tf = fields.get("rapport_type", {})
         title_text = data.get("report_type", "")
+        title_shift = 0.0
         if title_text:
-            c.setFont(tf.get("font", "Inter-Bold"), tf.get("size", 28.9))
             color = self._color(tf, "color", "primary", "cover.rapport_type(png)")
-            c.setFillColor(HexColor(color))
-            c.drawString(tf.get("x", 54.3), tf.get("y_bl", 120.5), title_text)
+            title_shift = self._draw_cover_title(c, tf, title_text, color, A4[0])
 
         sf = fields.get("project_naam", {})
         subtitle_text = data.get("project", "")
@@ -992,7 +1057,7 @@ class CoverGenerator:
             c.setFont(sf.get("font", "Inter-Regular"), sf.get("size", 17.8))
             color = self._color(sf, "color", "secondary", "cover.project_naam(png)")
             c.setFillColor(HexColor(color))
-            c.drawString(sf.get("x", 55.0), sf.get("y_bl", 78.6), subtitle_text)
+            c.drawString(sf.get("x", 55.0), sf.get("y_bl", 78.6) - title_shift, subtitle_text)
 
         c.save()
         return output
