@@ -61,7 +61,7 @@ Lees in volgorde:
 2. `TODO.md` — open items (🔴 Kritiek → 🟡 Middel → 🟢 Laag)
 3. `archief/2026-Q1-voltooid.md` — alleen raadplegen als historisch spoor nodig is
 4. `frontend/CLAUDE.md` — frontend-specifieke conventies (als je in frontend werkt)
-5. Orchestrator: `C:/GitHub/openaec-orchestrator/sessions/openaec-reports_latest.md` — laatste handoff van PM-laag
+5. Orchestrator: `C:\Users\JoKo\.claude\orchestrator\sessions\openaec-reports_latest.md` — laatste handoff van PM-laag
 
 ---
 
@@ -81,8 +81,8 @@ Lees in volgorde:
 ## Informatie-routing (conform orchestrator CLAUDE.md §Informatie-routing)
 
 **Bugs, features, tech-debt met `bestand:regel` ref** → `TODO.md` in deze repo, geen cross-write naar orchestrator
-**Cross-project coördinatie / platform-blokkades** → `C:/GitHub/openaec-orchestrator/TODO-*.md`
-**Sessie-handoff ("vandaag gedaan, morgen doen")** → `C:/GitHub/openaec-orchestrator/sessions/openaec-reports_latest.md`, **max 8 KB**
+**Cross-project coördinatie / platform-blokkades** → `D:\dev\openaec\openaec-orchestrator\TODO-*.md`
+**Sessie-handoff ("vandaag gedaan, morgen doen")** → `C:\Users\JoKo\.claude\orchestrator\sessions\openaec-reports_latest.md`, **max 8 KB**
 
 **Grootte-drempels:**
 - `TODO.md` > 10 KB → archiveer historie naar `archief/YYYY-Qn-voltooid.md`
@@ -111,7 +111,7 @@ Lees in volgorde:
 
 ## Sessie-einde
 
-Schrijf handoff naar `C:/GitHub/openaec-orchestrator/sessions/openaec-reports_latest.md` (max 8 KB). Gebruik dit formaat:
+Schrijf handoff naar `C:\Users\JoKo\.claude\orchestrator\sessions\openaec-reports_latest.md` (max 8 KB). Gebruik dit formaat:
 
 ```markdown
 # OpenAEC Reports — Sessie update
@@ -131,5 +131,5 @@ Schrijf handoff naar `C:/GitHub/openaec-orchestrator/sessions/openaec-reports_la
 (relevantie voor warmteverlies / pyrevit / orchestrator)
 ```
 
-**Orchestrator context-file:** `C:/GitHub/openaec-orchestrator/context/report.md`
-**Project registry:** `C:/GitHub/openaec-orchestrator/project-registry.json` (entry `openaec-reports`)
+**Orchestrator context-file:** `C:\Users\JoKo\.claude\orchestrator\context\report.md`
+**Project registry:** `C:\Users\JoKo\.claude\orchestrator\project-registry.json` (entry `openaec-reports`)
