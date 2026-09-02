@@ -150,6 +150,7 @@ fn render_calculation(
             header_font_name: brand.resolve_font_name("heading"),
             font_size: Pt(9.0),
             header_font_size: Pt(9.0),
+            header_rule: false,
         };
 
         let table = Table::new(Vec::new(), rows)
@@ -227,6 +228,7 @@ fn render_check(
         header_font_name: brand.resolve_font_name("heading"),
         font_size: Pt(9.0),
         header_font_size: Pt(9.0),
+        header_rule: false,
     };
 
     let table = Table::new(headers, vec![row]).with_style(table_style);
@@ -281,6 +283,7 @@ fn render_table(
         header_font_name: brand.resolve_font_name("heading"),
         font_size: Pt(9.0),
         header_font_size: Pt(9.0),
+        header_rule: false,
     };
 
     let mut table = Table::new(t.headers.clone(), rows).with_style(table_style);

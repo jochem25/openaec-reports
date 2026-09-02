@@ -18,6 +18,77 @@ fn to_pdf_mm(pt: Pt) -> printpdf::Mm {
     printpdf::Mm(mm.0)
 }
 
+/// Nabewerking op de opgeslagen PDF via lopdf:
+/// 1. alpha-kanalen als /SMask (indirect DeviceGray-image) aan de
+///    RGB-image-objecten hangen — printpdf 0.7 kan dit zelf niet correct
+///    (verwisselde afmetingen en een inline stream in de dictionary);
+///    matching per (breedte, hoogte) in documentvolgorde;
+/// 2. alle ongefilterde streams Flate-comprimeren — printpdf schrijft
+///    fonts en content onbewerkt weg, wat PDF's megabytes groter maakt.
+fn finalize_pdf(
+    bytes: &[u8],
+    smasks: &[(usize, usize, Vec<u8>)],
+) -> Result<Vec<u8>, String> {
+    use printpdf::lopdf::{self, Object, Stream};
+
+    let mut doc = lopdf::Document::load_mem(bytes).map_err(|e| e.to_string())?;
+
+    // Kandidaat-images verzamelen (object-id-volgorde = aanmaakvolgorde)
+    let mut candidates: Vec<(lopdf::ObjectId, i64, i64)> = Vec::new();
+    for (id, obj) in doc.objects.iter() {
+        if let Object::Stream(s) = obj {
+            let d = &s.dict;
+            let is_image = d
+                .get(b"Subtype")
+                .and_then(|o| o.as_name())
+                .map(|n| n == b"Image")
+                .unwrap_or(false);
+            let is_rgb = d
+                .get(b"ColorSpace")
+                .and_then(|o| o.as_name())
+                .map(|n| n == b"DeviceRGB")
+                .unwrap_or(false);
+            let has_smask = d.get(b"SMask").map(|o| !matches!(o, Object::Null)).unwrap_or(false);
+            if is_image && is_rgb && !has_smask {
+                let w = d.get(b"Width").and_then(|o| o.as_i64()).unwrap_or(0);
+                let h = d.get(b"Height").and_then(|o| o.as_i64()).unwrap_or(0);
+                candidates.push((*id, w, h));
+            }
+        }
+    }
+
+    let mut used: Vec<lopdf::ObjectId> = Vec::new();
+    for (w, h, alpha) in smasks {
+        let target = candidates
+            .iter()
+            .find(|(id, cw, ch)| *cw == *w as i64 && *ch == *h as i64 && !used.contains(id))
+            .map(|(id, _, _)| *id);
+        let Some(target_id) = target else { continue };
+        used.push(target_id);
+
+        let mut sm_dict = lopdf::Dictionary::new();
+        sm_dict.set("Type", Object::Name(b"XObject".to_vec()));
+        sm_dict.set("Subtype", Object::Name(b"Image".to_vec()));
+        sm_dict.set("Width", Object::Integer(*w as i64));
+        sm_dict.set("Height", Object::Integer(*h as i64));
+        sm_dict.set("ColorSpace", Object::Name(b"DeviceGray".to_vec()));
+        sm_dict.set("BitsPerComponent", Object::Integer(8));
+        let sm_id = doc.add_object(Stream::new(sm_dict, alpha.clone()));
+
+        if let Ok(Object::Stream(s)) = doc.get_object_mut(target_id) {
+            s.dict.set("SMask", Object::Reference(sm_id));
+        }
+    }
+
+    // Flate-compressie van alle nog ongefilterde streams (fonts, content,
+    // afbeeldingen, smasks) — scheelt doorgaans meer dan de helft.
+    doc.compress();
+
+    let mut out = Vec::new();
+    doc.save_to(&mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// Convert CamelCase font name to hyphenated form.
 /// "Inter-Bold" → "Inter-Bold", "Inter-RegularItalic" → "Inter-BookItalic"
 fn camel_to_hyphen(name: &str) -> String {
@@ -263,25 +334,40 @@ impl DocTemplate {
             "Content",
         );
 
-        // Register fonts with printpdf
+        // Register fonts with printpdf — één embed per uniek font: aliassen
+        // delen de referentie. Voorheen werd het volledige TTF-bestand per
+        // alias opnieuw ingebed (9 kopieën ≈ 7 MB per PDF).
         let fonts_guard = self.fonts.lock().unwrap();
         let mut pdf_fonts: std::collections::HashMap<String, printpdf::IndirectFontRef> =
             std::collections::HashMap::new();
+        let mut per_font: std::collections::HashMap<usize, printpdf::IndirectFontRef> =
+            std::collections::HashMap::new();
 
         for (name, font_id) in fonts_guard.iter() {
-            let font_data = fonts_guard.font_data(font_id);
-            match doc.add_external_font(font_data) {
-                Ok(font_ref) => {
-                    pdf_fonts.insert(name.to_string(), font_ref);
+            let font_ref = match per_font.get(&font_id.0) {
+                Some(r) => Some(r.clone()),
+                None => {
+                    let font_data = fonts_guard.font_data(font_id);
+                    match doc.add_external_font(font_data) {
+                        Ok(r) => {
+                            per_font.insert(font_id.0, r.clone());
+                            Some(r)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to register font '{}': {}", name, e);
+                            None
+                        }
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to register font '{}': {}", name, e);
-                }
+            };
+            if let Some(r) = font_ref {
+                pdf_fonts.insert(name.to_string(), r);
             }
         }
         drop(fonts_guard);
 
         // Render each page
+        let mut smask_queue: Vec<(usize, usize, Vec<u8>)> = Vec::new();
         for (page_idx, rendered_page) in pages.iter().enumerate() {
             let (page_ref, layer_ref) = if page_idx == 0 {
                 (first_page_idx, first_layer_idx)
@@ -294,7 +380,7 @@ impl DocTemplate {
             };
 
             let layer = doc.get_page(page_ref).get_layer(layer_ref);
-            self.render_draw_list(&layer, &rendered_page.draw_list, rendered_page.page_size.height, &pdf_fonts);
+            self.render_draw_list(&layer, &rendered_page.draw_list, rendered_page.page_size.height, &pdf_fonts, &mut smask_queue);
         }
 
         // Save to bytes
@@ -302,8 +388,20 @@ impl DocTemplate {
         doc.save(&mut buf)
             .map_err(|e| LayoutError::PdfError(e.to_string()))?;
 
-        buf.into_inner()
-            .map_err(|e| LayoutError::PdfError(e.to_string()))
+        let bytes = buf
+            .into_inner()
+            .map_err(|e| LayoutError::PdfError(e.to_string()))?;
+
+        // Nabewerking op de eindbytes: alpha-kanalen als /SMask aanhangen
+        // (printpdf's eigen smask-pad is onbruikbaar) en alle streams
+        // comprimeren — printpdf schrijft fonts en content ongecomprimeerd.
+        match finalize_pdf(&bytes, &smask_queue) {
+            Ok(b) => Ok(b),
+            Err(e) => {
+                tracing::warn!("PDF-nabewerking mislukt, ruwe uitvoer gebruikt: {}", e);
+                Ok(bytes)
+            }
+        }
     }
 
     /// Measure text width using the font registry.
@@ -329,6 +427,7 @@ impl DocTemplate {
         draw_list: &DrawList,
         page_height: Pt,
         fonts: &std::collections::HashMap<String, printpdf::IndirectFontRef>,
+        smask_queue: &mut Vec<(usize, usize, Vec<u8>)>,
     ) {
         let mut current_font: Option<&printpdf::IndirectFontRef> = None;
         let mut current_font_size: f32 = 10.0;
@@ -503,19 +602,26 @@ impl DocTemplate {
                     height,
                 } => {
                     if let Ok(dynamic_img) = ::image::load_from_memory(data) {
-                        // If image has alpha, composite onto current fill color background
+                        // Alpha: het RGB-hoofdbeeld wordt tegen de actuele fill-kleur
+                        // gecomposited (nette fallback voor viewers zonder SMask) en
+                        // het alpha-kanaal gaat de wachtrij in — render_pdf hangt het
+                        // na het opslaan als echte /SMask aan het image-object, zodat
+                        // de transparantie behouden blijft op elke ondergrond.
                         let rgb = if dynamic_img.color().has_alpha() {
                             let rgba = dynamic_img.to_rgba8();
                             let (w, h) = (rgba.width(), rgba.height());
                             let (bg_r, bg_g, bg_b) = current_fill_rgb;
                             let mut out = Vec::with_capacity((w * h * 3) as usize);
+                            let mut alpha = Vec::with_capacity((w * h) as usize);
                             for pixel in rgba.pixels() {
                                 let a = pixel[3] as f32 / 255.0;
                                 let inv = 1.0 - a;
                                 out.push((pixel[0] as f32 * a + bg_r as f32 * inv) as u8);
                                 out.push((pixel[1] as f32 * a + bg_g as f32 * inv) as u8);
                                 out.push((pixel[2] as f32 * a + bg_b as f32 * inv) as u8);
+                                alpha.push(pixel[3]);
                             }
+                            smask_queue.push((w as usize, h as usize, alpha));
                             (out, w as usize, h as usize)
                         } else {
                             let img = dynamic_img.to_rgb8();
