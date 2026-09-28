@@ -661,6 +661,18 @@ class FontManager:
 # ---------------------------------------------------------------------------
 
 
+def _is_svg(path: Path) -> bool:
+    """SVG op extensie, of op inhoud als de extensie ontbreekt of niet klopt."""
+    if path.suffix.lower() == ".svg":
+        return True
+    try:
+        with open(path, "rb") as f:
+            head = f.read(512).lstrip()
+    except OSError:
+        return False
+    return head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in head)
+
+
 def _resolve_image(src) -> Path | None:
     """Resolve image source: file path, base64 dict, or None."""
     if not src:
@@ -670,7 +682,10 @@ def _resolve_image(src) -> Path | None:
         # Base64 encoded image
         data = src.get("data", "")
         media_type = src.get("media_type", "image/png")
-        ext = ".png" if "png" in media_type else ".jpg"
+        if "svg" in media_type:
+            ext = ".svg"
+        else:
+            ext = ".png" if "png" in media_type else ".jpg"
         try:
             raw = base64.b64decode(data)
             tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
@@ -2742,15 +2757,36 @@ class ContentRenderer:
         target_w = (width_mm * 2.8346) if width_mm else max_w
         target_w = min(target_w, max_w)
 
-        # Get image aspect ratio
-        try:
-            from PIL import Image as PILImage
+        # SVG als vector: omzetten naar een PDF-pagina en die plaatsen.
+        svg_doc: fitz.Document | None = None
+        if _is_svg(img_path):
+            try:
+                with fitz.open(str(img_path), filetype="svg") as svg:
+                    svg_doc = fitz.open("pdf", svg.convert_to_pdf())
+                svg_rect = svg_doc[0].rect
+                aspect = svg_rect.height / svg_rect.width
+            except Exception as e:  # noqa: BLE001 - MuPDF-fouttypes verschillen per versie
+                label = src if isinstance(src, str) else img_path.name
+                logger.error("SVG kon niet worden geplaatst: %s (%s)", label, e)
+                self.y += 12
+                self._text(
+                    x, self.y, f"[SVG kon niet worden geplaatst: {Path(label).name}]",
+                    error_s.get("font", "Inter-Regular"),
+                    error_s.get("size", 9.5),
+                    self._color(error_s, "color", "warning", "image.error"),
+                )
+                self.y += 16
+                return
+        else:
+            # Get image aspect ratio
+            try:
+                from PIL import Image as PILImage
 
-            with PILImage.open(img_path) as im:
-                iw, ih = im.size
-            aspect = ih / iw
-        except (ImportError, OSError, ZeroDivisionError):
-            aspect = 0.75  # fallback 4:3
+                with PILImage.open(img_path) as im:
+                    iw, ih = im.size
+                aspect = ih / iw
+            except (ImportError, OSError, ZeroDivisionError):
+                aspect = 0.75  # fallback 4:3
 
         target_h = target_w * aspect
         max_h = self.y_max - self.y - 30  # leave room for caption
@@ -2763,7 +2799,11 @@ class ContentRenderer:
         self.y += 8
         rect = fitz.Rect(x, self.y, x + target_w, self.y + target_h)
         try:
-            self.page.insert_image(rect, filename=str(img_path))
+            if svg_doc is not None:
+                self.page.show_pdf_page(rect, svg_doc, 0)
+                svg_doc.close()
+            else:
+                self.page.insert_image(rect, filename=str(img_path))
         except (OSError, ValueError, RuntimeError) as e:
             logger.warning("Image insert failed: %s", e)
             self._text(

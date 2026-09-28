@@ -1,6 +1,6 @@
 # TODO — openaec-reports
 
-**Laatst bijgewerkt:** 2026-09-28 (BVP E1-E5, E7-E9) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
+**Laatst bijgewerkt:** 2026-09-28 (BVP E1-E9 klaar) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
 
 > Legenda: 🔴 Blocker | 🟡 Middel | 🟢 Nice-to-have
 > Voltooid werk is verplaatst naar `archief/2026-Q1-voltooid.md` (1 apr 2026). Deze file bevat alleen open items.
@@ -56,7 +56,8 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 - [x] E5 definition_list
 - [x] E8 part/reference in kop en inhoudsopgave
 - [x] E9 statuslabel in kop (`header_label`; kba-brand heeft geen kopelementen)
-- [ ] E6 SVG in image
+- [x] E6 SVG in image als vector (ook base64 image/svg+xml)
+- [ ] Rust-pariteit E1-E9 (`rust/`), nodig voordat Ypsilon lokaal rendert
 - [ ] `tenants/kba/stationery` lokaal leeg (kop/voet/colofon ontbreken lokaal); niet zelf vullen
 
 ### Rust renderer — feature parity met Python `renderer_v2.py`

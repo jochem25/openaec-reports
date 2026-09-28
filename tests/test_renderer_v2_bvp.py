@@ -272,3 +272,74 @@ def test_header_label_on_content_pages_only(tmp_path, monkeypatch):
     flags = ["CONCEPT" in page.get_text() for page in fitz.open(str(out))]
     # cover, toc, hfst 1, hfst 2, achterblad
     assert flags == [False, True, True, True, False]
+
+
+SVG = (
+    '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">'
+    '<rect x="10" y="10" width="180" height="80" fill="none" stroke="red"/></svg>'
+)
+
+
+class TestIsSvg:
+    """E6: SVG herkennen op extensie of inhoud."""
+
+    def test_by_extension(self, tmp_path):
+        from openaec_reports.core.renderer_v2 import _is_svg
+
+        path = tmp_path / "a.svg"
+        path.write_text("x")
+        assert _is_svg(path)
+
+    def test_by_content(self, tmp_path):
+        from openaec_reports.core.renderer_v2 import _is_svg
+
+        path = tmp_path / "a.jpg"
+        path.write_text(SVG)
+        assert _is_svg(path)
+
+    def test_png_is_not_svg(self, tmp_path):
+        from openaec_reports.core.renderer_v2 import _is_svg
+
+        path = tmp_path / "a.png"
+        path.write_bytes(b"\x89PNG\r\n\x1a\n")
+        assert not _is_svg(path)
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "3bm" / "stationery" / "standaard.pdf").exists(),
+    reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
+)
+def test_svg_image_is_placed_as_vector(tmp_path, monkeypatch):
+    """E6: SVG wordt vector (tekenpaden, geen rasterbeeld); kapotte SVG geeft zichtbare fout."""
+    import base64
+
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    good = tmp_path / "fig.svg"
+    good.write_text(SVG)
+    broken = tmp_path / "kapot.svg"
+    broken.write_text("<svg xmlns='http://www.w3.org/2000/svg'><rect width=")
+    b64 = {"data": base64.b64encode(SVG.encode()).decode(), "media_type": "image/svg+xml"}
+    data = {
+        "project": "E6", "template": "standaard",
+        "colofon": {"enabled": False}, "toc": {"enabled": False},
+        "backcover": {"enabled": False},
+        "sections": [{"title": "Figuren", "content": [
+            {"type": "image", "src": str(good), "width_mm": 80},
+            {"type": "image", "src": b64, "width_mm": 80},
+            {"type": "image", "src": str(broken)},
+        ]}],
+    }
+    out = tmp_path / "e6.pdf"
+    ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
+        data, TENANTS_DIR / "3bm" / "stationery", out
+    )
+    page = fitz.open(str(out))[-1]
+    red_rects = [
+        d for d in page.get_drawings()
+        if d.get("color") and d["color"][0] > 0.9 and d["color"][1] < 0.1
+    ]
+    assert len(red_rects) >= 2
+    assert "SVG kon niet worden geplaatst: kapot.svg" in page.get_text()
