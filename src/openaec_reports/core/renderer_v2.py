@@ -3150,11 +3150,29 @@ class ContentRenderer:
                 self._add_page_number()
             self._orientation = section_orientation
 
-        if section.get("page_break_before", False) or level == 1:
+        # Level 1 begint standaard op een nieuwe pagina; page_break_before:
+        # false zet dat uit (korte hoofdstukken). Een orientatiewissel forceert
+        # altijd een nieuwe pagina. Voor level 2+ is de default
+        # geen paginabreuk. Staat er nog geen pagina, dan altijd een nieuwe.
+        page_break = section.get("page_break_before")
+        if page_break is None:
+            page_break = level == 1
+        if page_break or orientation_changed or self.page is None:
             self._new_page()
-        elif orientation_changed:
-            # Forceer nieuwe pagina bij oriëntatiewissel
-            self._new_page()
+        elif level == 1:
+            # Doorlopend hoofdstuk: witruimte boven de kop (bovenaan een
+            # pagina is die er via de marge al). Past de kop met een paar
+            # regels inhoud niet meer, dan toch een nieuwe pagina.
+            h1 = self.blocks.get("heading_1", {})
+            gap = h1.get("spacing_before_continued", 30.0)
+            needed = (
+                gap
+                + h1.get("number", {}).get("size", 18.0)
+                + h1.get("spacing_after", 33.9)
+                + h1.get("keep_with_next", 40.0)
+            )
+            if not self._check_overflow(needed):
+                self.y += gap
 
         number = self._resolve_heading_number(level, explicit_number)
 

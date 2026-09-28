@@ -179,3 +179,36 @@ class TestDisplayPageNr:
         # _add_page_number schreef "5" en hoogde de teller op naar 6.
         fake = SimpleNamespace(current_page_nr=6, _page_number_written=True)
         assert ContentRenderer._display_page_nr(fake) == 5
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "3bm" / "stationery" / "standaard.pdf").exists(),
+    reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
+)
+def test_level1_without_page_break(tmp_path, monkeypatch):
+    """E7: page_break_before false bij level 1 houdt het hoofdstuk op dezelfde pagina."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    def pages(second_break):
+        second = {"title": "Tweede", "content": [{"type": "paragraph", "text": "b"}]}
+        if second_break is not None:
+            second["page_break_before"] = second_break
+        data = {
+            "project": "E7", "template": "standaard",
+            "colofon": {"enabled": False}, "toc": {"enabled": False},
+            "backcover": {"enabled": False},
+            "sections": [
+                {"title": "Eerste", "content": [{"type": "paragraph", "text": "a"}]},
+                second,
+            ],
+        }
+        out = tmp_path / f"e7_{second_break}.pdf"
+        ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
+            data, TENANTS_DIR / "3bm" / "stationery", out
+        )
+        return len(fitz.open(str(out)))
+
+    assert pages(False) == pages(None) - 1
+    assert pages(True) == pages(None)

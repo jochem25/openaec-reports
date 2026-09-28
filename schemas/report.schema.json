@@ -192,8 +192,7 @@
         },
         "page_break_before": {
           "type": "boolean",
-          "default": false,
-          "description": "Forceer nieuwe pagina voor deze sectie"
+          "description": "Nieuwe pagina voor deze sectie. Weggelaten: level 1 wel, level 2+ niet. false bij level 1 = hoofdstuk loopt door op de huidige pagina (renderer_v2)"
         }
       }
     },
