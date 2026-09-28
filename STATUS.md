@@ -27,7 +27,7 @@
 | **Rust renderer feature parity** | parity gap vs Python `renderer_v2.py` | Heading-nummering + TOC counter state |
 | **Authentik Unified SSO migratie** | plan klaar, blokkeert op auth-fix | Fase 5 Reports migratie (dependencies.py refactor, JWT exit) |
 | **Desktop Tauri v2** | v0.2.0-alpha draft | D4 Authentik redirect URI, D5 OA logo, D6-D9 signing/updater/dialogs |
-| **BVP-uitbreidingen E1-E9** (renderer_v2) | E1-E3 klaar (branch `feat/bvp-engine`) | E4 checklist, daarna E5/E7/E8 en Rust-pariteit; spec `D:\KBA_projecten\000_Documentatie\00_bouwveiligheidsplan\sjabloon\UITBREIDING_REPORT_ENGINE.md` |
+| **BVP-uitbreidingen E1-E9** (renderer_v2) | E1-E4 (must) klaar (branch `feat/bvp-engine`) | E5/E7/E8, daarna E6/E9 en Rust-pariteit; spec `D:\KBA_projecten\000_Documentatie\00_bouwveiligheidsplan\sjabloon\UITBREIDING_REPORT_ENGINE.md` |
 | **Renderer brand-substitutie** | Fase 1-3 klaar | RV-3 (SegoeUI-Semibold.ttf), RV-5 (covervarianten b/c/d), RV-6 (KBA-tenant deploy naar server) — zie `TODO.md` |
 
 ---

@@ -1,6 +1,6 @@
 # TODO — openaec-reports
 
-**Laatst bijgewerkt:** 2026-09-28 (BVP E1-E3) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
+**Laatst bijgewerkt:** 2026-09-28 (BVP E1-E4) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
 
 > Legenda: 🔴 Blocker | 🟡 Middel | 🟢 Nice-to-have
 > Voltooid werk is verplaatst naar `archief/2026-Q1-voltooid.md` (1 apr 2026). Deze file bevat alleen open items.
@@ -51,7 +51,7 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 - [x] E2 runs met labels in paragraph en bullet_list (`core/rich_text.py`); cellen volgen met E3
 - [x] E3 celobjecten (runs, bg_color, align, ...), cell_styles, row_styles group, tabel zonder kop
 - [ ] Legacy `<b>`-cellen in tabellen renderen in kba/3bm als Regular (bold-font valt terug); fix wijzigt bestaande PDF's, besluit nodig
-- [ ] E4 checklist-blok
+- [x] E4 checklist-blok (1/2 kolommen, checked true/false/null)
 - [ ] E5 definition_list, E7 level-1 zonder paginabreuk, E8 part/reference
 - [ ] E6 SVG in image, E9 statuslabel in kop
 - [ ] `tenants/kba/stationery` lokaal leeg (kop/voet/colofon ontbreken lokaal); niet zelf vullen

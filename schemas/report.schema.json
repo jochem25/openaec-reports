@@ -213,6 +213,7 @@
         { "$ref": "#/$defs/block_spacer" },
         { "$ref": "#/$defs/block_page_break" },
         { "$ref": "#/$defs/block_bullet_list" },
+        { "$ref": "#/$defs/block_checklist" },
         { "$ref": "#/$defs/block_heading_2" },
         { "$ref": "#/$defs/block_raw_flowable" },
         { "$ref": "#/$defs/block_bic_table" },
@@ -507,6 +508,31 @@
           "type": "array",
           "items": { "$ref": "#/$defs/rich_text_item" },
           "description": "Lijst van opsommingspunten: string, of object met text of runs"
+        }
+      }
+    },
+
+    "block_checklist": {
+      "type": "object",
+      "required": ["type", "items"],
+      "description": "Aankruislijst met vakjes",
+      "properties": {
+        "type": { "const": "checklist" },
+        "columns": { "type": "integer", "enum": [1, 2], "default": 1 },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "anyOf": [{ "required": ["text"] }, { "required": ["runs"] }],
+            "properties": {
+              "text": { "type": "string" },
+              "runs": { "$ref": "#/$defs/rich_runs" },
+              "checked": {
+                "type": ["boolean", "null"],
+                "description": "true = aangevinkt, false = leeg vak, null = leeg vak met label n.t.b."
+              }
+            }
+          }
         }
       }
     },

@@ -93,3 +93,25 @@ class TestTable:
     def test_bad_align_rejected(self, validator):
         block = {"type": "table", "rows": [[{"text": "a", "align": "justify"}]]}
         assert errors(validator, report(block))
+
+
+class TestChecklist:
+    def test_checklist(self, validator):
+        block = {
+            "type": "checklist",
+            "columns": 2,
+            "items": [
+                {"text": "Vooropname", "checked": True},
+                {"text": "Nulmeting", "checked": False},
+                {"runs": [{"text": "24/7 bereikbaar"}], "checked": None},
+            ],
+        }
+        assert errors(validator, report(block)) == []
+
+    def test_three_columns_rejected(self, validator):
+        block = {"type": "checklist", "columns": 3, "items": [{"text": "a"}]}
+        assert errors(validator, report(block))
+
+    def test_item_needs_text_or_runs(self, validator):
+        block = {"type": "checklist", "items": [{"checked": True}]}
+        assert errors(validator, report(block))

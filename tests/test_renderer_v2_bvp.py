@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -127,3 +128,41 @@ class TestCellSpec:
 
     def test_invalid_align_falls_back_left(self, fake):
         assert self.spec(fake, {"text": "x", "align": "justify"}).align == "left"
+
+
+TENANTS_DIR = Path(__file__).parent.parent / "tenants"
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "3bm" / "stationery" / "standaard.pdf").exists(),
+    reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
+)
+def test_render_bvp_blocks_smoke(tmp_path, monkeypatch):
+    """E2-E4 renderen samen zonder fouten; tekst en labels staan in de PDF."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    ntb = {"label": {"text": "n.t.b.", "kind": "ntb"}}
+    data = {
+        "project": "Rooktest",
+        "template": "standaard",
+        "colofon": {"enabled": False},
+        "toc": {"enabled": False},
+        "sections": [{"title": "Blokken", "number": "12", "content": [
+            {"type": "paragraph", "runs": [{"text": "Stand ", "bold": True}, ntb]},
+            {"type": "bullet_list", "items": ["los", {"runs": [{"text": "runs"}]}]},
+            {"type": "table", "rows": [["Groep", ""], ["a", {"text": "3", "bg_color": "#FAD7B5"}]],
+             "row_styles": [{"row": 0, "style": "group"}]},
+            {"type": "checklist", "columns": 2, "items": [
+                {"text": "Vooropname", "checked": True}, {"text": "Nulmeting", "checked": None},
+            ]},
+        ]}],
+    }
+    out = tmp_path / "bvp.pdf"
+    ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
+        data, TENANTS_DIR / "3bm" / "stationery", out
+    )
+    text = "".join(page.get_text() for page in fitz.open(str(out)))
+    for expected in ("Stand", "N.T.B.", "Groep", "Vooropname", "Nulmeting", "runs"):
+        assert expected in text

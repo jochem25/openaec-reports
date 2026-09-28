@@ -2068,6 +2068,74 @@ class ContentRenderer:
                 self.y += text_s["line_height"]
             self.y += sb.get("spacing_between", 10.1)
 
+    # --- Checklist ---
+
+    def checklist(self, block: dict) -> None:
+        """Aankruislijst: vak (aangevinkt, leeg, of leeg + n.t.b.) met tekst of runs.
+
+        ``checked: true`` = vinkje, ``false`` = leeg vak, ``null``/ontbrekend =
+        leeg vak met een ntb-label achter de tekst. Bij ``columns: 2`` worden
+        de items rijsgewijs verdeeld (links, rechts, links, ...).
+        """
+        p = self.blocks.get("paragraph", {})
+        cs = self.blocks.get("checklist", {})
+        x = cs.get("x", p["x"])
+        max_w = cs.get("max_width", p["max_width"])
+        fontname = cs.get("font", p["font"])
+        size = cs.get("size", p["size"])
+        color = cs.get("color", p["color"])
+        line_h = cs.get("line_height", p["line_height"])
+        box = cs.get("box_size", 9.0)
+        box_line = cs.get("box_line_width", 0.85)
+        box_color = self._color(cs, "box_color", "primary", "checklist.box_color")
+        check_color = self._color(cs, "check_color", "primary", "checklist.check_color")
+        text_gap = cs.get("text_gap", 6.0)
+        col_gap = cs.get("column_gap", 14.0)
+        row_spacing = cs.get("row_spacing", 4.0)
+        unknown = cs.get("unknown_label", "n.t.b.")
+
+        columns = 2 if block.get("columns") == 2 else 1
+        col_w = (max_w - col_gap * (columns - 1)) / columns
+        text_w = col_w - box - text_gap
+
+        laid_out: list[tuple[object, list[Line]]] = []
+        for item in block.get("items", []):
+            if not isinstance(item, dict):
+                item = {"text": str(item)}
+            runs = list(runs_of(item) or [{"text": str(item.get("text", ""))}])
+            checked = item.get("checked")
+            if checked is None:
+                runs += [{"text": " "}, {"label": {"text": unknown, "kind": "ntb"}}]
+            laid_out.append((checked, self._layout_runs(runs, fontname, size, color, text_w)))
+
+        self.y += cs.get("spacing_before", p.get("spacing_before", 12.0))
+        for start in range(0, len(laid_out), columns):
+            row = laid_out[start:start + columns]
+            row_h = max(len(lines) for _, lines in row) * line_h
+            self._check_overflow(row_h)
+            for col, (checked, lines) in enumerate(row):
+                cx = x + col * (col_w + col_gap)
+                center = self.y + size * 0.8 - size * 0.33
+                rect = fitz.Rect(cx, center - box / 2, cx + box, center + box / 2)
+                self.page.draw_rect(
+                    rect, color=_hex_to_rgb(box_color), fill=(1, 1, 1),
+                    width=box_line, radius=0.12,
+                )
+                if checked:
+                    self.page.draw_polyline(
+                        [
+                            fitz.Point(rect.x0 + box * 0.22, rect.y0 + box * 0.52),
+                            fitz.Point(rect.x0 + box * 0.42, rect.y0 + box * 0.72),
+                            fitz.Point(rect.x0 + box * 0.78, rect.y0 + box * 0.28),
+                        ],
+                        color=_hex_to_rgb(check_color), width=box_line * 1.4,
+                        lineCap=1, lineJoin=1,
+                    )
+                for li, line in enumerate(lines):
+                    self._draw_rich_line(line, cx + box + text_gap, self.y + li * line_h, size)
+            self.y += row_h + row_spacing
+        self.y += cs.get("spacing_after", p.get("spacing_after", 12.0)) - row_spacing
+
     # --- Table ---
 
     def _cell_spec(
@@ -3118,6 +3186,8 @@ class ContentRenderer:
                 self.rich_paragraph(block["runs"])
             else:
                 self.paragraph(block.get("text", ""))
+        elif block_type == "checklist":
+            self.checklist(block)
         elif block_type == "bullet_list":
             self.bullet_list(block.get("items", []))
         elif block_type == "heading_2":
