@@ -1733,6 +1733,28 @@ class ContentRenderer:
 
     # --- Content blocks ---
 
+    def _heading_title_x(self, style: dict, number: str) -> float:
+        """X van de koptitel, opgeschoven als het nummer breder is dan de template aanneemt.
+
+        De template-x van de titel gaat uit van een nummer met enkelcijferige delen
+        ("4", "4.1"). Is het nummer breder ("12", "12.10"), dan schuift de titel
+        precies het verschil op, zodat nummer en titel niet in elkaar lopen. Met
+        ``number_gap`` (pt) in de template geldt in plaats daarvan
+        ``max(titel-x, nummer-x + breedte(nummer) + number_gap)``.
+        """
+        n = style.get("number", {})
+        t = style.get("title", {})
+        if not number:
+            return t["x"]
+        font = self.fonts.get_fitz_font(n["font"])
+        width = font.text_length(number, fontsize=n["size"])
+        gap = style.get("number_gap")
+        if gap is not None:
+            return max(t["x"], n["x"] + width + float(gap))
+        reference = re.sub(r"\d+", "0", number)
+        extra = width - font.text_length(reference, fontsize=n["size"])
+        return t["x"] + max(0.0, extra)
+
     def heading_1(self, number: str, title: str) -> None:
         s = self.blocks.get("heading_1", {})
         n = s.get("number", {})
@@ -1742,7 +1764,8 @@ class ContentRenderer:
         # page waarop de heading getekend wordt.
         self.heading_log.append((1, number, title, self.current_page_nr))
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
-        self._text(t["x"], self.y, title, t["font"], t["size"], t["color"])
+        title_x = self._heading_title_x(s, number)
+        self._text(title_x, self.y, title, t["font"], t["size"], t["color"])
         self.y += n["size"] + s.get("spacing_after", 33.9)
 
     def heading_2(self, number: str, title: str) -> None:
@@ -1757,7 +1780,9 @@ class ContentRenderer:
         self.y += spacing_before
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
         y_title = self.y - (t["size"] - n["size"]) * 0.3
-        self._text(t["x"], y_title, title, t["font"], t["size"], t["color"])
+        self._text(
+            self._heading_title_x(s, number), y_title, title, t["font"], t["size"], t["color"]
+        )
         self.y += t["size"] + s.get("spacing_after", 20.5)
 
     def paragraph(self, text: str) -> None:
