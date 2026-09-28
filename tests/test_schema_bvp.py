@@ -115,3 +115,21 @@ class TestChecklist:
     def test_item_needs_text_or_runs(self, validator):
         block = {"type": "checklist", "items": [{"checked": True}]}
         assert errors(validator, report(block))
+
+
+class TestDefinitionList:
+    def test_definition_list(self, validator):
+        block = {
+            "type": "definition_list",
+            "label_width_mm": 40,
+            "rows": [
+                {"label": "Project", "value": "Parkview"},
+                {"label": "Aannemer", "runs": [{"label": {"text": "n.t.b."}}]},
+                {"label": "Leeg", "value": None},
+            ],
+        }
+        assert errors(validator, report(block)) == []
+
+    def test_row_needs_label(self, validator):
+        block = {"type": "definition_list", "rows": [{"value": "x"}]}
+        assert errors(validator, report(block))

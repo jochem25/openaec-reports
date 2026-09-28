@@ -213,6 +213,7 @@
         { "$ref": "#/$defs/block_page_break" },
         { "$ref": "#/$defs/block_bullet_list" },
         { "$ref": "#/$defs/block_checklist" },
+        { "$ref": "#/$defs/block_definition_list" },
         { "$ref": "#/$defs/block_heading_2" },
         { "$ref": "#/$defs/block_raw_flowable" },
         { "$ref": "#/$defs/block_bic_table" },
@@ -507,6 +508,28 @@
           "type": "array",
           "items": { "$ref": "#/$defs/rich_text_item" },
           "description": "Lijst van opsommingspunten: string, of object met text of runs"
+        }
+      }
+    },
+
+    "block_definition_list": {
+      "type": "object",
+      "required": ["type", "rows"],
+      "description": "Label-waarde-lijst zonder rasterlijnen (label grijs, waarde inkt)",
+      "properties": {
+        "type": { "const": "definition_list" },
+        "label_width_mm": { "type": "number", "minimum": 5, "default": 45 },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label"],
+            "properties": {
+              "label": { "type": "string" },
+              "value": { "type": ["string", "number", "null"] },
+              "runs": { "$ref": "#/$defs/rich_runs" }
+            }
+          }
         }
       }
     },

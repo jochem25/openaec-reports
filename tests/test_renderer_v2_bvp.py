@@ -154,6 +154,7 @@ def test_render_bvp_blocks_smoke(tmp_path, monkeypatch):
             {"type": "bullet_list", "items": ["los", {"runs": [{"text": "runs"}]}]},
             {"type": "table", "rows": [["Groep", ""], ["a", {"text": "3", "bg_color": "#FAD7B5"}]],
              "row_styles": [{"row": 0, "style": "group"}]},
+            {"type": "definition_list", "rows": [{"label": "Opdrachtgever", "value": "BV"}]},
             {"type": "checklist", "columns": 2, "items": [
                 {"text": "Vooropname", "checked": True}, {"text": "Nulmeting", "checked": None},
             ]},
@@ -164,7 +165,8 @@ def test_render_bvp_blocks_smoke(tmp_path, monkeypatch):
         data, TENANTS_DIR / "3bm" / "stationery", out
     )
     text = "".join(page.get_text() for page in fitz.open(str(out)))
-    for expected in ("Stand", "N.T.B.", "Groep", "Vooropname", "Nulmeting", "runs"):
+    expected_texts = ("Stand", "N.T.B.", "Groep", "Vooropname", "Nulmeting", "runs", "Opdrachtgever")
+    for expected in expected_texts:
         assert expected in text
 
 

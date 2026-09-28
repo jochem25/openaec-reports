@@ -216,6 +216,9 @@ def _parse_cell(value: object) -> tuple[str, bool]:
     return _strip_html(text), is_bold
 
 
+_PT_PER_MM = 72 / 25.4
+
+
 @dataclass
 class _CellSpec:
     """Genormaliseerde tabelcel. ``rich=False`` = oud pad (tekst + hele-cel-vet)."""
@@ -2079,6 +2082,46 @@ class ContentRenderer:
                 self.y += text_s["line_height"]
             self.y += sb.get("spacing_between", 10.1)
 
+    # --- Definitielijst ---
+
+    def definition_list(self, block: dict) -> None:
+        """Label-waarde-lijst zonder rasterlijnen: label grijs, waarde in inktkleur.
+
+        ``rows: [{label, value | runs}]``; ``label_width_mm`` zet de breedte
+        van de labelkolom. Labels en waarden lopen binnen hun kolom terug.
+        """
+        p = self.blocks.get("paragraph", {})
+        ds = self.blocks.get("definition_list", {})
+        x = ds.get("x", p["x"])
+        max_w = ds.get("max_width", p["max_width"])
+        fontname = ds.get("font", p["font"])
+        size = ds.get("size", p["size"])
+        line_h = ds.get("line_height", p["line_height"])
+        label_color = self._color(ds, "label_color", "text_light", "definition_list.label")
+        value_color = self._color(ds, "value_color", "text", "definition_list.value")
+        label_w = float(block.get("label_width_mm", ds.get("label_width_mm", 45.0))) * _PT_PER_MM
+        gap = ds.get("gap", 8.0)
+        row_spacing = ds.get("row_spacing", 3.0)
+        value_w = max(max_w - label_w - gap, 20.0)
+
+        self.y += ds.get("spacing_before", p.get("spacing_before", 12.0))
+        for row in block.get("rows", []):
+            if not isinstance(row, dict):
+                continue
+            label_lines = self._layout_runs(
+                [{"text": str(row.get("label", ""))}], fontname, size, label_color, label_w
+            )
+            value_runs = runs_of(row) or [{"text": str(row.get("value", "") or "")}]
+            value_lines = self._layout_runs(value_runs, fontname, size, value_color, value_w)
+            row_h = max(len(label_lines), len(value_lines)) * line_h
+            self._check_overflow(row_h)
+            for li, line in enumerate(label_lines):
+                self._draw_rich_line(line, x, self.y + li * line_h, size)
+            for li, line in enumerate(value_lines):
+                self._draw_rich_line(line, x + label_w + gap, self.y + li * line_h, size)
+            self.y += row_h + row_spacing
+        self.y += ds.get("spacing_after", p.get("spacing_after", 12.0)) - row_spacing
+
     # --- Checklist ---
 
     def checklist(self, block: dict) -> None:
@@ -3215,6 +3258,8 @@ class ContentRenderer:
                 self.rich_paragraph(block["runs"])
             else:
                 self.paragraph(block.get("text", ""))
+        elif block_type == "definition_list":
+            self.definition_list(block)
         elif block_type == "checklist":
             self.checklist(block)
         elif block_type == "bullet_list":
