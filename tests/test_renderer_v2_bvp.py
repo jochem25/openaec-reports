@@ -166,3 +166,16 @@ def test_render_bvp_blocks_smoke(tmp_path, monkeypatch):
     text = "".join(page.get_text() for page in fitz.open(str(out)))
     for expected in ("Stand", "N.T.B.", "Groep", "Vooropname", "Nulmeting", "runs"):
         assert expected in text
+
+
+class TestDisplayPageNr:
+    """TOC-paginanummer als inhoud doorloopt op een al genummerde pagina."""
+
+    def test_fresh_page(self):
+        fake = SimpleNamespace(current_page_nr=5, _page_number_written=False)
+        assert ContentRenderer._display_page_nr(fake) == 5
+
+    def test_page_number_already_stamped(self):
+        # _add_page_number schreef "5" en hoogde de teller op naar 6.
+        fake = SimpleNamespace(current_page_nr=6, _page_number_written=True)
+        assert ContentRenderer._display_page_nr(fake) == 5

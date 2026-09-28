@@ -1619,6 +1619,17 @@ class ContentRenderer:
             return True
         return False
 
+    def _display_page_nr(self) -> int:
+        """Paginanummer van de huidige pagina.
+
+        ``_add_page_number`` hoogt de teller op zodra het nummer gestempeld
+        is; loopt de inhoud daarna op dezelfde pagina door (een sectie zonder
+        paginabreuk), dan is het nummer van deze pagina de teller min een.
+        """
+        if self._page_number_written:
+            return self.current_page_nr - 1
+        return self.current_page_nr
+
     def _add_page_number(self) -> None:
         """Add page number to current page (idempotent per page).
 
@@ -1835,7 +1846,7 @@ class ContentRenderer:
         self._check_overflow(n.get("size", 18) + s.get("spacing_after", 33.9))
         # Log AFTER overflow check: current_page_nr reflects the actual
         # page waarop de heading getekend wordt.
-        self.heading_log.append((1, number, title, self.current_page_nr))
+        self.heading_log.append((1, number, title, self._display_page_nr()))
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
         title_x = self._heading_title_x(s, number)
         self._text(title_x, self.y, title, t["font"], t["size"], t["color"])
@@ -1849,7 +1860,7 @@ class ContentRenderer:
         self._check_overflow(spacing_before + t.get("size", 13) + s.get("spacing_after", 20.5))
         # Log AFTER overflow check zodat het juiste paginanummer wordt
         # vastgelegd (ook als overflow een _new_page heeft getriggerd).
-        self.heading_log.append((2, number, title, self.current_page_nr))
+        self.heading_log.append((2, number, title, self._display_page_nr()))
         self.y += spacing_before
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
         y_title = self.y - (t["size"] - n["size"]) * 0.3
