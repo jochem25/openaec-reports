@@ -84,3 +84,46 @@ class TestRunColor:
     def test_unknown_and_empty_fall_back(self, fake):
         assert ContentRenderer._run_color(fake, "paars", "#000000") == "#000000"
         assert ContentRenderer._run_color(fake, None, "#000000") == "#000000"
+
+
+class TestCellSpec:
+    """E3: tabelcellen als object, cell_styles, gewone cellen ongewijzigd."""
+
+    @pytest.fixture
+    def fake(self):
+        fake = SimpleNamespace(
+            _brand_config=SimpleNamespace(colors={"surface": "#F4F8F7", "text_light": "#6B7975"}),
+            _COLOR_ALIASES=ContentRenderer._COLOR_ALIASES,
+        )
+        fake._run_color = lambda value, default: ContentRenderer._run_color(fake, value, default)
+        return fake
+
+    def spec(self, fake, value, styles=None, row=0, col=0):
+        return ContentRenderer._cell_spec(fake, value, row, col, styles or {})
+
+    def test_plain_cell_keeps_old_path(self, fake):
+        sp = self.spec(fake, "<b>Totaal</b>")
+        assert (sp.text, sp.bold, sp.rich) == ("Totaal", True, False)
+
+    def test_number_cell(self, fake):
+        sp = self.spec(fake, 3.5)
+        assert (sp.text, sp.rich) == ("3.5", False)
+
+    def test_object_cell(self, fake):
+        sp = self.spec(fake, {"text": "2", "bg_color": "#FFF3C4", "align": "center", "bold": True})
+        assert sp.rich and sp.bold and sp.align == "center" and sp.bg_color == "#FFF3C4"
+
+    def test_runs_cell_plain_text(self, fake):
+        sp = self.spec(fake, {"runs": [{"text": "Stand "}, {"label": {"text": "ntb"}}]})
+        assert sp.text == "Stand ntb" and sp.runs
+
+    def test_cell_styles_applies_to_plain_cell(self, fake):
+        sp = self.spec(fake, "a", {"1,2": {"italic": True, "text_color": "grijs"}}, row=1, col=2)
+        assert sp.rich and sp.italic and sp.color == "#6B7975" and sp.text == "a"
+
+    def test_cell_value_overrides_cell_styles(self, fake):
+        sp = self.spec(fake, {"text": "x", "align": "right"}, {"0,0": {"align": "center"}})
+        assert sp.align == "right"
+
+    def test_invalid_align_falls_back_left(self, fake):
+        assert self.spec(fake, {"text": "x", "align": "justify"}).align == "left"

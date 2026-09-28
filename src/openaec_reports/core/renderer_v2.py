@@ -23,6 +23,8 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +45,7 @@ from openaec_reports.core.rich_text import (
     TextStyle,
     label_piece,
     layout_pieces,
+    plain_text,
     runs_of,
     text_pieces,
 )
@@ -211,6 +214,26 @@ def _parse_cell(value: object) -> tuple[str, bool]:
     match = _RE_BOLD_WRAPPER.match(text)
     is_bold = match is not None
     return _strip_html(text), is_bold
+
+
+@dataclass
+class _CellSpec:
+    """Genormaliseerde tabelcel. ``rich=False`` = oud pad (tekst + hele-cel-vet)."""
+
+    text: str
+    bold: bool
+    italic: bool = False
+    color: str | None = None
+    bg_color: str | None = None
+    align: str = "left"
+    runs: list[dict] | None = None
+    rich: bool = False
+
+    def as_runs(self) -> list[dict]:
+        """Runs voor de regelopbouw; zonder eigen runs een run met de celopmaak."""
+        if self.runs:
+            return self.runs
+        return [{"text": self.text, "bold": self.bold, "italic": self.italic}]
 
 
 # ---------------------------------------------------------------------------
@@ -2047,6 +2070,79 @@ class ContentRenderer:
 
     # --- Table ---
 
+    def _cell_spec(
+        self, value: object, row: int, col: int, cell_styles: dict,
+    ) -> _CellSpec:
+        """Normaliseer een tabelcel; ``cell_styles["r,c"]`` vult objectvelden aan."""
+        extra = cell_styles.get(f"{row},{col}") if cell_styles else None
+        if not isinstance(value, dict) and not extra:
+            text, bold = _parse_cell(value)
+            return _CellSpec(text, bold)
+        obj = dict(extra or {})
+        if isinstance(value, dict):
+            obj.update(value)
+        else:
+            text, bold = _parse_cell(value)
+            obj.setdefault("text", text)
+            if bold:
+                obj.setdefault("bold", True)
+        runs = runs_of(obj)
+        text = plain_text(runs) if runs else str(obj.get("text", "") or "")
+        color = obj.get("color") or obj.get("text_color")
+        bg = obj.get("bg_color")
+        align = obj.get("align", "left")
+        return _CellSpec(
+            text=text,
+            bold=bool(obj.get("bold")),
+            italic=bool(obj.get("italic")),
+            color=self._run_color(color, "") or None if color else None,
+            bg_color=self._run_color(bg, "") or None if bg else None,
+            align=align if align in ("left", "center", "right") else "left",
+            runs=runs,
+            rich=True,
+        )
+
+    def _table_group_row(
+        self,
+        row_specs: list[_CellSpec],
+        x: float,
+        max_w: float,
+        cell_pad: float,
+        cell_line_h: float,
+        fontname: str,
+        fontsize: float,
+        group_s: dict,
+        grid_color: tuple,
+        render_header: Callable[[], None],
+        header_h: float,
+    ) -> None:
+        """Groepsrij: tekst van de eerste gevulde cel over alle kolommen, vet op vlak."""
+        spec = next((sp for sp in row_specs if sp.text or sp.runs), _CellSpec("", False))
+        bold = group_s.get("bold", True)
+        runs = [
+            r if "label" in r else {**r, "bold": r.get("bold", bold)}
+            for r in (spec.runs or [{"text": spec.text, "italic": spec.italic}])
+        ]
+        color = spec.color or self._color(group_s, "color", "primary", "table.group.color")
+        lines = self._layout_runs(runs, fontname, fontsize, color, max_w - cell_pad * 2)
+        row_h = max(len(lines) * cell_line_h + 6, cell_line_h + 6)
+        if self._check_overflow(row_h):
+            render_header()
+            self.y += header_h
+        bg = spec.bg_color or self._color(group_s, "background", "surface", "table.group.bg")
+        self.page.draw_rect(
+            fitz.Rect(x, self.y, x + max_w, self.y + row_h), color=None, fill=_hex_to_rgb(bg)
+        )
+        for li, line in enumerate(lines):
+            self._draw_rich_line(line, x + cell_pad, self.y + 3 + li * cell_line_h, fontsize)
+        self.page.draw_line(
+            fitz.Point(x, self.y + row_h),
+            fitz.Point(x + max_w, self.y + row_h),
+            color=grid_color,
+            width=0.3,
+        )
+        self.y += row_h
+
     def table(self, block: dict) -> None:
         """Render a table block with header and rows.
 
@@ -2085,9 +2181,17 @@ class ContentRenderer:
         raw_widths = block.get("column_widths")
         title = block.get("title", "")
         style = block.get("style", "")
-        num_cols = (
-            len(headers_raw) if headers_raw else (len(rows_raw[0]) if rows_raw else 0)
-        )
+        group_rows = {
+            int(rs["row"])
+            for rs in block.get("row_styles") or []
+            if isinstance(rs, dict) and rs.get("style") == "group" and "row" in rs
+        }
+        cell_styles = block.get("cell_styles") or {}
+        if headers_raw:
+            num_cols = len(headers_raw)
+        else:
+            data_rows = [r for i, r in enumerate(rows_raw) if i not in group_rows]
+            num_cols = max((len(r) for r in data_rows), default=0)
         if num_cols == 0:
             return
 
@@ -2097,8 +2201,16 @@ class ContentRenderer:
         # Body cellen krijgen per cel een (text, is_bold) tuple zodat
         # ``<b>...</b>`` markup uit de payload bold gerenderd kan worden
         # zonder dat de tags letterlijk in de PDF terechtkomen.
+        # Objectcellen ({runs} of {text, bold, ...}) en cell_styles geven een
+        # opgemaakte cel; gewone cellen volgen ongewijzigd het oude pad.
+        specs: list[list[_CellSpec]] = [
+            [self._cell_spec(cell, r, c, cell_styles) for c, cell in enumerate(row)]
+            for r, row in enumerate(rows_raw)
+        ]
+        # Groepsrijen tellen niet mee voor kolombreedtes (ze overspannen alles).
         rows: list[list[tuple[str, bool]]] = [
-            [_parse_cell(cell) for cell in row] for row in rows_raw
+            [(sp.text, sp.bold) for sp in row]
+            for r, row in enumerate(specs) if r not in group_rows
         ]
 
         # --- Resolve column widths ---
@@ -2196,6 +2308,9 @@ class ContentRenderer:
             header_wrapped.append(lines if lines else [""])
         header_max_lines = max((len(lines) for lines in header_wrapped), default=1)
         header_h = max(header_max_lines * (h_fontsize * 1.35) + 8, 20.0)
+        has_header = bool(headers_raw)
+        if not has_header:
+            header_h = 0.0
 
         spacing_before = s.get("spacing_before", 20.0)
 
@@ -2219,6 +2334,13 @@ class ContentRenderer:
 
         # --- Render header helper ---
         def render_header():
+            if not has_header:
+                # Zonder kopregel sluit een bovenlijn de tabel af (ook na paginabreuk).
+                self.page.draw_line(
+                    fitz.Point(x, self.y), fitz.Point(x + max_w, self.y),
+                    color=grid_color, width=0.5,
+                )
+                return
             header_rect = fitz.Rect(x, self.y, x + max_w, self.y + header_h)
             self.page.draw_rect(header_rect, color=None, fill=bg_color)
             cx = x
@@ -2253,20 +2375,34 @@ class ContentRenderer:
         # Bold body font name (via centrale helper). Valt terug op de
         # header font wanneer die niet direct afgeleid kan worden.
         b_bold_fontname = _derive_bold_fontname(b_fontname, fallback_bold=h_fontname)
+        b_color_hex = self._color(body_s, "color", "primary", "table.body.text")
+        group_s = s.get("group", {})
 
         # --- Body rows ---
-        for row_idx, row in enumerate(rows):
-            # Pre-wrap all cells to determine row height. Elke cell is een
-            # (text, is_bold) tuple zodat we de juiste font kunnen kiezen.
-            row_wrapped: list[list[tuple[str, bool]]] = []
+        for row_idx, row_specs in enumerate(specs):
+            if row_idx in group_rows:
+                self._table_group_row(
+                    row_specs, x, max_w, cell_pad, cell_line_h, b_fontname, b_fontsize,
+                    group_s, grid_color, render_header, header_h,
+                )
+                continue
+            # Pre-wrap all cells to determine row height. Gewone cellen als
+            # (text, is_bold)-regels, opgemaakte cellen als rich_text-regels.
+            row_wrapped: list[list] = []
             for i in range(num_cols):
-                cell_text, cell_bold = row[i] if i < len(row) else ("", False)
+                spec = row_specs[i] if i < len(row_specs) else _CellSpec("", False)
                 w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
+                if spec.rich:
+                    row_wrapped.append(self._layout_runs(
+                        spec.as_runs(), b_fontname, b_fontsize,
+                        spec.color or b_color_hex, w - cell_pad * 2,
+                    ))
+                    continue
                 lines = self.fonts.wrap_text(
-                    cell_text, b_fontsize, w - cell_pad * 2, bold=cell_bold
+                    spec.text, b_fontsize, w - cell_pad * 2, bold=spec.bold
                 )
                 wrapped_lines = lines if lines else [""]
-                row_wrapped.append([(line, cell_bold) for line in wrapped_lines])
+                row_wrapped.append([(line, spec.bold) for line in wrapped_lines])
             max_lines = max(len(lines) for lines in row_wrapped)
             row_h = max(max_lines * cell_line_h + 6, cell_line_h + 6)
 
@@ -2284,7 +2420,26 @@ class ContentRenderer:
             cx = x
             for i, lines in enumerate(row_wrapped):
                 w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
+                spec = row_specs[i] if i < len(row_specs) else _CellSpec("", False)
                 y_text = self.y + 3  # top padding
+                if spec.bg_color:
+                    self.page.draw_rect(
+                        fitz.Rect(cx, self.y, cx + w, self.y + row_h),
+                        color=None, fill=_hex_to_rgb(spec.bg_color),
+                    )
+                if spec.rich:
+                    inner_w = w - cell_pad * 2
+                    for li, line in enumerate(lines):
+                        offset = 0.0
+                        if spec.align == "center":
+                            offset = (inner_w - line.width) / 2
+                        elif spec.align == "right":
+                            offset = inner_w - line.width
+                        self._draw_rich_line(
+                            line, cx + cell_pad + offset, y_text + li * cell_line_h, b_fontsize
+                        )
+                    cx += w
+                    continue
                 for li, (line, line_bold) in enumerate(lines):
                     font_name = b_bold_fontname if line_bold else b_fontname
                     font_obj = self.fonts.get_fitz_font(font_name)

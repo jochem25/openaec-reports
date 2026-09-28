@@ -66,3 +66,30 @@ class TestRuns:
             "items": ["tekst", {"text": "object"}, {"runs": [{"text": "runs", "bold": True}]}],
         }
         assert errors(validator, report(block)) == []
+
+
+class TestTable:
+    def test_table_without_headers(self, validator):
+        assert errors(validator, report({"type": "table", "rows": [["a", "b"]]})) == []
+
+    def test_table_cells_rows_and_cell_styles(self, validator):
+        block = {
+            "type": "table",
+            "headers": ["Aspect", "Score"],
+            "rows": [
+                ["Groep", ""],
+                ["Bouwput", {"text": "3", "bg_color": "#FAD7B5", "align": "center"}],
+                [{"runs": [{"text": "x"}, {"label": {"text": "n.t.b."}}]}, 2, None],
+            ],
+            "row_styles": [{"row": 0, "style": "group"}],
+            "cell_styles": {"1,0": {"italic": True, "color": "grijs"}},
+        }
+        assert errors(validator, report(block)) == []
+
+    def test_unknown_row_style_rejected(self, validator):
+        block = {"type": "table", "rows": [["a"]], "row_styles": [{"row": 0, "style": "x"}]}
+        assert errors(validator, report(block))
+
+    def test_bad_align_rejected(self, validator):
+        block = {"type": "table", "rows": [[{"text": "a", "align": "justify"}]]}
+        assert errors(validator, report(block))
