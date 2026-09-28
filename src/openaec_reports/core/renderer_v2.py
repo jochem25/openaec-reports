@@ -1704,7 +1704,37 @@ class ContentRenderer:
         lv1_color = self._color(lv1, "color", "text_accent", "toc.level1")
         lv2_color = self._color(lv2, "color", "primary", "toc.level2")
 
-        for level, number, title, pg in entries:
+        part_cfg = toc_cfg.get("part", {})
+        current_part = ""
+        for entry in entries:
+            level, number, title, pg = entry[:4]
+            part = entry[4] if len(entry) > 4 else ""
+            reference = entry[5] if len(entry) > 5 else ""
+            if level == 1 and part and part != current_part:
+                # Deelkop als groepsregel boven de hoofdstukken van dat deel.
+                self.y += part_cfg.get("spacing_before", 17.0)
+                self._check_overflow(20)
+                self._text(
+                    part_cfg.get("x", lv1.get("number_x", 90.0)), self.y, part,
+                    part_cfg.get("font", lv1.get("font", "Inter-Regular")),
+                    part_cfg.get("size", 9.0),
+                    self._color(part_cfg, "color", "text_light", "toc.part"),
+                )
+                self.y += part_cfg.get("spacing_after", 0.0)
+            if level == 1:
+                current_part = part or current_part
+            if reference:
+                lv = lv1 if level == 1 else lv2
+                ref_cfg = toc_cfg.get("reference", {})
+                ref_size = ref_cfg.get("size", round(lv.get("size", 9.5) * 0.8, 2))
+                pending_reference = (
+                    ref_cfg.get("right_x", lv.get("page_x", 515.4) - ref_cfg.get("gap", 12.0)),
+                    (lv.get("size", 9.5) - ref_size) * 0.8, reference,
+                    ref_cfg.get("font", lv.get("font", "Inter-Regular")), ref_size,
+                    self._color(ref_cfg, "color", "text_light", "toc.reference"),
+                )
+            else:
+                pending_reference = None
             if level == 1:
                 self.y += lv1.get("spacing_before", 17.0)
                 self._check_overflow(20)
@@ -1732,6 +1762,10 @@ class ContentRenderer:
                     lv1.get("size", 12.0),
                     lv1_color,
                 )
+                if pending_reference:
+                    self._text_right(
+                        pending_reference[0], self.y + pending_reference[1], *pending_reference[2:]
+                    )
                 self.y += lv1.get("spacing_after", 20.0)
             else:
                 self._check_overflow(17.3)
@@ -1759,6 +1793,10 @@ class ContentRenderer:
                     lv2.get("size", 9.5),
                     lv2_color,
                 )
+                if pending_reference:
+                    self._text_right(
+                        pending_reference[0], self.y + pending_reference[1], *pending_reference[2:]
+                    )
                 self.y += lv2.get("spacing_after", 17.3)
 
         self._add_page_number()
@@ -1842,20 +1880,57 @@ class ContentRenderer:
         extra = width - font.text_length(reference, fontsize=n["size"])
         return t["x"] + max(0.0, extra)
 
-    def heading_1(self, number: str, title: str) -> None:
+    def heading_1(
+        self, number: str, title: str, part: str = "", reference: str = "",
+    ) -> None:
         s = self.blocks.get("heading_1", {})
         n = s.get("number", {})
         t = s.get("title", {})
-        self._check_overflow(n.get("size", 18) + s.get("spacing_after", 33.9))
+        part_s = s.get("part", {})
+        part_h = (part_s.get("size", 9.0) + part_s.get("spacing_after", 8.0)) if part else 0.0
+        self._check_overflow(part_h + n.get("size", 18) + s.get("spacing_after", 33.9))
         # Log AFTER overflow check: current_page_nr reflects the actual
         # page waarop de heading getekend wordt.
-        self.heading_log.append((1, number, title, self._display_page_nr()))
+        self.heading_log.append(
+            (1, number, title, self._display_page_nr(), part or "", reference or "")
+        )
+        if part:
+            self._text(
+                part_s.get("x", n["x"]), self.y, part,
+                part_s.get("font", t["font"]), part_s.get("size", 9.0),
+                self._color(part_s, "color", "text_light", "heading_1.part"),
+            )
+            self.y += part_h
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
         title_x = self._heading_title_x(s, number)
         self._text(title_x, self.y, title, t["font"], t["size"], t["color"])
+        if reference:
+            self._heading_reference(s, "heading_1", reference, self.y, t["size"])
         self.y += n["size"] + s.get("spacing_after", 33.9)
 
-    def heading_2(self, number: str, title: str) -> None:
+    def _heading_reference(
+        self, style: dict, block: str, reference: str, y_td: float, title_size: float,
+    ) -> None:
+        """Verwijzing rechts in de kop, grijs, op de basislijn van de titel."""
+        ref_s = style.get("reference", {})
+        size = ref_s.get("size", 9.0)
+        p = self.blocks.get("paragraph", {})
+        right = ref_s.get("right_x", p.get("x", 125.4) + p.get("max_width", 393.0))
+        baseline_td = y_td + title_size * 0.8 - size * 0.8
+        self._text_right(
+            right, baseline_td, reference,
+            ref_s.get("font", style.get("title", {}).get("font", "Inter-Regular")), size,
+            self._color(ref_s, "color", "text_light", f"{block}.reference"),
+        )
+
+    def _text_right(
+        self, x_right: float, y_td: float, text: str, fontname: str, size: float, color: str,
+    ) -> None:
+        """Tekst rechts uitgelijnd op ``x_right``."""
+        width = self.fonts.get_fitz_font(fontname).text_length(text, fontsize=size)
+        self._text(x_right - width, y_td, text, fontname, size, color)
+
+    def heading_2(self, number: str, title: str, reference: str = "") -> None:
         s = self.blocks.get("heading_2", {})
         n = s.get("number", {})
         t = s.get("title", {})
@@ -1863,13 +1938,15 @@ class ContentRenderer:
         self._check_overflow(spacing_before + t.get("size", 13) + s.get("spacing_after", 20.5))
         # Log AFTER overflow check zodat het juiste paginanummer wordt
         # vastgelegd (ook als overflow een _new_page heeft getriggerd).
-        self.heading_log.append((2, number, title, self._display_page_nr()))
+        self.heading_log.append((2, number, title, self._display_page_nr(), "", reference or ""))
         self.y += spacing_before
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
         y_title = self.y - (t["size"] - n["size"]) * 0.3
         self._text(
             self._heading_title_x(s, number), y_title, title, t["font"], t["size"], t["color"]
         )
+        if reference:
+            self._heading_reference(s, "heading_2", reference, y_title, t["size"])
         self.y += t["size"] + s.get("spacing_after", 20.5)
 
     # --- Opgemaakte tekst (runs) ---
@@ -3222,10 +3299,11 @@ class ContentRenderer:
         # Titel moet altijd getekend worden wanneer aanwezig, ook als
         # er geen (auto)nummer beschikbaar is.
         if title or number:
+            reference = str(section.get("reference") or "")
             if level == 1:
-                self.heading_1(number, title)
+                self.heading_1(number, title, str(section.get("part") or ""), reference)
             elif level == 2:
-                self.heading_2(number, title)
+                self.heading_2(number, title, reference)
 
         for block in section.get("content", []):
             self._render_block(block)

@@ -133,3 +133,12 @@ class TestDefinitionList:
     def test_row_needs_label(self, validator):
         block = {"type": "definition_list", "rows": [{"value": "x"}]}
         assert errors(validator, report(block))
+
+
+class TestSectionPartReference:
+    def test_part_reference_and_no_page_break(self, validator):
+        data = report({"type": "paragraph", "text": "a"})
+        data["sections"][0].update(
+            {"part": "DEEL B - RISICO'S", "reference": "Bbl 7.4", "page_break_before": False}
+        )
+        assert errors(validator, data) == []

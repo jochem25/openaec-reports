@@ -190,6 +190,14 @@
           "default": "portrait",
           "description": "Oriëntatie voor deze specifieke sectie. Overschrijft document orientation."
         },
+        "part": {
+          "type": "string",
+          "description": "Deelkop boven de hoofdstuktitel en als groepsregel in de inhoudsopgave (level 1), bijv. 'DEEL B - RISICO'S'"
+        },
+        "reference": {
+          "type": "string",
+          "description": "Verwijzing rechts uitgelijnd en grijs in de kop en de inhoudsopgave (level 1 en 2), bijv. 'Bbl 7.4 - 7.5a-c'"
+        },
         "page_break_before": {
           "type": "boolean",
           "description": "Nieuwe pagina voor deze sectie. Weggelaten: level 1 wel, level 2+ niet. false bij level 1 = hoofdstuk loopt door op de huidige pagina (renderer_v2)"

@@ -165,8 +165,9 @@ def test_render_bvp_blocks_smoke(tmp_path, monkeypatch):
         data, TENANTS_DIR / "3bm" / "stationery", out
     )
     text = "".join(page.get_text() for page in fitz.open(str(out)))
-    expected_texts = ("Stand", "N.T.B.", "Groep", "Vooropname", "Nulmeting", "runs", "Opdrachtgever")
-    for expected in expected_texts:
+    for expected in (
+        "Stand", "N.T.B.", "Groep", "Vooropname", "Nulmeting", "runs", "Opdrachtgever",
+    ):
         assert expected in text
 
 
@@ -214,3 +215,33 @@ def test_level1_without_page_break(tmp_path, monkeypatch):
 
     assert pages(False) == pages(None) - 1
     assert pages(True) == pages(None)
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "3bm" / "stationery" / "standaard.pdf").exists(),
+    reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
+)
+def test_part_and_reference_in_heading_and_toc(tmp_path, monkeypatch):
+    """E8: deelkop en verwijzing staan in de kop en in de inhoudsopgave."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    data = {
+        "project": "E8", "template": "standaard",
+        "colofon": {"enabled": False}, "backcover": {"enabled": False},
+        "sections": [{
+            "title": "Risicomatrix", "part": "DEEL B - RISICO'S", "reference": "Bbl 7.4",
+            "content": [{"type": "paragraph", "text": "a"}],
+        }],
+    }
+    out = tmp_path / "e8.pdf"
+    ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
+        data, TENANTS_DIR / "3bm" / "stationery", out
+    )
+    doc = fitz.open(str(out))
+    toc_page = next(p for p in doc if "Inhoud" in p.get_text())
+    heading_page = next(p for p in doc if "Risicomatrix" in p.get_text() and p != toc_page)
+    for page in (toc_page, heading_page):
+        text = page.get_text()
+        assert "DEEL B - RISICO'S" in text and "Bbl 7.4" in text
