@@ -245,3 +245,30 @@ def test_part_and_reference_in_heading_and_toc(tmp_path, monkeypatch):
     for page in (toc_page, heading_page):
         text = page.get_text()
         assert "DEEL B - RISICO'S" in text and "Bbl 7.4" in text
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "3bm" / "stationery" / "standaard.pdf").exists(),
+    reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
+)
+def test_header_label_on_content_pages_only(tmp_path, monkeypatch):
+    """E9: statuslabel op TOC- en inhoudspagina's, niet op cover of achterblad."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    data = {
+        "project": "E9", "template": "standaard", "header_label": "Concept",
+        "colofon": {"enabled": False},
+        "sections": [
+            {"title": "Een", "content": [{"type": "paragraph", "text": "a"}]},
+            {"title": "Twee", "content": [{"type": "paragraph", "text": "b"}]},
+        ],
+    }
+    out = tmp_path / "e9.pdf"
+    ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
+        data, TENANTS_DIR / "3bm" / "stationery", out
+    )
+    flags = ["CONCEPT" in page.get_text() for page in fitz.open(str(out))]
+    # cover, toc, hfst 1, hfst 2, achterblad
+    assert flags == [False, True, True, True, False]

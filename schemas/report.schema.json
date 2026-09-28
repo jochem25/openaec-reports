@@ -76,6 +76,20 @@
         "max_depth": { "type": "integer", "minimum": 1, "maximum": 3, "default": 3 }
       }
     },
+    "header_label": {
+      "description": "Statuslabel rechtsboven op elke inhoudspagina (renderer_v2), bijv. 'CONCEPT' of 'MOCKUP - NIET INDIENEN'. Weggelaten = geen label",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["text"],
+          "properties": {
+            "text": { "type": "string" },
+            "kind": { "type": "string", "enum": ["ntb", "bron", "ok", "nvt", "fout"], "default": "fout" }
+          }
+        }
+      ]
+    },
     "sections": {
       "type": "array",
       "description": "Rapport secties in volgorde",

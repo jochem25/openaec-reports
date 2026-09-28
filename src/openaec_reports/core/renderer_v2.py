@@ -1547,6 +1547,9 @@ class ContentRenderer:
         # waarvan de titels zelf al een nummering bevatten (bijv. BBL-
         # toetsingen met "Afd. 4.3 — ..." als titel).
         self._auto_number_enabled: bool = True
+        # Statuslabel rechtsboven op elke inhoudspagina ("CONCEPT"); gezet
+        # door ReportGeneratorV2 vanuit data["header_label"]. Leeg = geen.
+        self.header_label: str | dict = ""
         self._section_counter: int = 0
         self._subsection_counter: int = 0
 
@@ -1607,12 +1610,37 @@ class ContentRenderer:
 
         margins = self.tpl.standaard.get("margins", {})
         self.y = margins.get("top", 74.9)
+        if self.header_label and template_key == "standaard":
+            self._draw_header_label()
 
         # Y-max instellen op basis van oriëntatie
         if self._orientation == "landscape":
             self.y_max = self._default_y_max_landscape
         else:
             self.y_max = self._default_y_max_portrait
+
+    def _draw_header_label(self) -> None:
+        """Statuslabel (chip) rechtsboven in de kop van een inhoudspagina.
+
+        Positie en soort via ``standaard.yaml`` ``header_label`` (``right_x``,
+        ``y_td``, ``kind``, ``size``); standaard rechts uitgelijnd op de
+        tekstkolom, halverwege de bovenmarge, als fout-label (rood omlijnd).
+        """
+        value = self.header_label
+        text = str(value.get("text", "")) if isinstance(value, dict) else str(value)
+        if not text:
+            return
+        cfg = self.tpl.standaard.get("header_label", {})
+        kind = (value.get("kind") if isinstance(value, dict) else None) or cfg.get("kind", "fout")
+        base = cfg.get("base_size", 11.0)
+        style = self._label_style(kind, base)
+        piece = label_piece(self._label_text(kind, text), style)
+        line = layout_pieces([piece], piece.width + 1.0)[0]
+        p = self.blocks.get("paragraph", {})
+        right = cfg.get("right_x", p.get("x", 125.4) + p.get("max_width", 393.0))
+        top = self.tpl.standaard.get("margins", {}).get("top", 74.9)
+        y_td = cfg.get("y_td", top / 2 - base * 0.47)
+        self._draw_rich_line(line, right - line.width, y_td, base)
 
     def _check_overflow(self, needed: float) -> bool:
         """Check if content fits; if not, finalize page and start new one."""
@@ -3687,6 +3715,7 @@ class ReportGeneratorV2:
         schatting uit ``_build_toc_entries`` (die alle entries naar
         dezelfde pagina liet wijzen).
         """
+        renderer.header_label = data.get("header_label") or ""
         toc_cfg = data.get("toc", {})
         toc_enabled = toc_cfg.get("enabled", True)
         # Auto-nummering default aan — rapporten met eigen nummering in

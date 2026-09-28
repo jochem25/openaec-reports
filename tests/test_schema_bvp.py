@@ -142,3 +142,16 @@ class TestSectionPartReference:
             {"part": "DEEL B - RISICO'S", "reference": "Bbl 7.4", "page_break_before": False}
         )
         assert errors(validator, data) == []
+
+
+class TestHeaderLabel:
+    def test_string_and_object(self, validator):
+        for value in ("CONCEPT", {"text": "MOCKUP - NIET INDIENEN", "kind": "ntb"}):
+            data = report({"type": "paragraph", "text": "a"})
+            data["header_label"] = value
+            assert errors(validator, data) == []
+
+    def test_bad_kind_rejected(self, validator):
+        data = report({"type": "paragraph", "text": "a"})
+        data["header_label"] = {"text": "x", "kind": "zzz"}
+        assert errors(validator, data)
