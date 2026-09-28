@@ -1,6 +1,6 @@
 # TODO — openaec-reports
 
-**Laatst bijgewerkt:** 2026-07-10 (KBA-kicker uppercase) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
+**Laatst bijgewerkt:** 2026-09-28 (BVP E1) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
 
 > Legenda: 🔴 Blocker | 🟡 Middel | 🟢 Nice-to-have
 > Voltooid werk is verplaatst naar `archief/2026-Q1-voltooid.md` (1 apr 2026). Deze file bevat alleen open items.
@@ -45,6 +45,15 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 ---
 
 ## 🟡 Middel
+
+### BVP-uitbreidingen renderer_v2 (opdracht planner 28-09)
+- [x] E1 heading-nummerbreedte: titel schuift op bij breder nummer (`_heading_title_x`)
+- [ ] E2 runs met labels in paragraph/bullet_list/cel
+- [ ] E3 celkleur, groepsrijen, tabel zonder kop
+- [ ] E4 checklist-blok
+- [ ] E5 definition_list, E7 level-1 zonder paginabreuk, E8 part/reference
+- [ ] E6 SVG in image, E9 statuslabel in kop
+- [ ] `tenants/kba/stationery` lokaal leeg (kop/voet/colofon ontbreken lokaal); niet zelf vullen
 
 ### Rust renderer — feature parity met Python `renderer_v2.py`
 
