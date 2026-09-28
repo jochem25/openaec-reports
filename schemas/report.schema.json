@@ -224,12 +224,17 @@
 
     "block_paragraph": {
       "type": "object",
-      "required": ["type", "text"],
+      "required": ["type"],
+      "anyOf": [{ "required": ["text"] }, { "required": ["runs"] }],
       "properties": {
         "type": { "const": "paragraph" },
         "text": {
           "type": "string",
           "description": "Tekst. Ondersteunt basis ReportLab XML markup: <b>, <i>, <sub>, <sup>"
+        },
+        "runs": {
+          "$ref": "#/$defs/rich_runs",
+          "description": "Opgemaakte tekst als runs; wint van text als beide aanwezig zijn"
         },
         "style": {
           "type": "string",
@@ -479,8 +484,8 @@
         "type": { "const": "bullet_list" },
         "items": {
           "type": "array",
-          "items": { "type": "string" },
-          "description": "Lijst van opsommingspunten"
+          "items": { "$ref": "#/$defs/rich_text_item" },
+          "description": "Lijst van opsommingspunten: string, of object met text of runs"
         }
       }
     },
@@ -637,6 +642,58 @@
           "description": "Objectfoto"
         }
       }
+    },
+
+    "rich_label": {
+      "type": "object",
+      "description": "Label (chip) in lopende tekst, bijv. n.t.b. of een bronverwijzing",
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["ntb", "bron", "ok", "nvt", "fout"],
+          "default": "ntb",
+          "description": "ntb (omlijnd, grijs), bron (gevuld, klein), ok, nvt, fout (rood)"
+        }
+      }
+    },
+
+    "rich_run": {
+      "type": "object",
+      "description": "Stuk opgemaakte tekst, of een label",
+      "anyOf": [{ "required": ["text"] }, { "required": ["label"] }],
+      "properties": {
+        "text": { "type": "string", "description": "Tekst; \\n geeft een harde regelafbreking" },
+        "bold": { "type": "boolean", "default": false },
+        "italic": { "type": "boolean", "default": false },
+        "color": {
+          "type": "string",
+          "description": "Semantische merkkleur (bijv. text_light, warning; aliassen grijs, rood, inkt, accent) of #RRGGBB"
+        },
+        "label": { "$ref": "#/$defs/rich_label" }
+      }
+    },
+
+    "rich_runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/rich_run" }
+    },
+
+    "rich_text_item": {
+      "description": "Tekst als string, of object met text of runs (runs wint)",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "anyOf": [{ "required": ["text"] }, { "required": ["runs"] }],
+          "properties": {
+            "text": { "type": "string" },
+            "runs": { "$ref": "#/$defs/rich_runs" }
+          }
+        }
+      ]
     },
 
     "image_source": {

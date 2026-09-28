@@ -1,6 +1,6 @@
 # TODO — openaec-reports
 
-**Laatst bijgewerkt:** 2026-09-28 (BVP E1) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
+**Laatst bijgewerkt:** 2026-09-28 (BVP E1-E2) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
 
 > Legenda: 🔴 Blocker | 🟡 Middel | 🟢 Nice-to-have
 > Voltooid werk is verplaatst naar `archief/2026-Q1-voltooid.md` (1 apr 2026). Deze file bevat alleen open items.
@@ -48,7 +48,7 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 
 ### BVP-uitbreidingen renderer_v2 (opdracht planner 28-09)
 - [x] E1 heading-nummerbreedte: titel schuift op bij breder nummer (`_heading_title_x`)
-- [ ] E2 runs met labels in paragraph/bullet_list/cel
+- [x] E2 runs met labels in paragraph en bullet_list (`core/rich_text.py`); cellen volgen met E3
 - [ ] E3 celkleur, groepsrijen, tabel zonder kop
 - [ ] E4 checklist-blok
 - [ ] E5 definition_list, E7 level-1 zonder paginabreuk, E8 part/reference

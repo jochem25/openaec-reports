@@ -59,3 +59,28 @@ class TestHeadingTitleX:
         font = fake_renderer.fonts.get_fitz_font("Inter-Regular")
         width = font.text_length("4", fontsize=18.0)
         assert self._x(fake_renderer, style, "4") == pytest.approx(max(108.0, 90.0 + width + 20))
+
+
+class TestRunColor:
+    """E2: runkleur uit merk, alias of hex; onbekend valt terug op de basiskleur."""
+
+    @pytest.fixture
+    def fake(self):
+        return SimpleNamespace(
+            _brand_config=SimpleNamespace(colors={"text_light": "#6B7975", "warning": "#A6342B"}),
+            _COLOR_ALIASES=ContentRenderer._COLOR_ALIASES,
+        )
+
+    def test_hex(self, fake):
+        assert ContentRenderer._run_color(fake, "#123456", "#000000") == "#123456"
+
+    def test_brand_key_and_ref(self, fake):
+        assert ContentRenderer._run_color(fake, "warning", "#000000") == "#A6342B"
+        assert ContentRenderer._run_color(fake, "$colors.warning", "#000000") == "#A6342B"
+
+    def test_alias(self, fake):
+        assert ContentRenderer._run_color(fake, "grijs", "#000000") == "#6B7975"
+
+    def test_unknown_and_empty_fall_back(self, fake):
+        assert ContentRenderer._run_color(fake, "paars", "#000000") == "#000000"
+        assert ContentRenderer._run_color(fake, None, "#000000") == "#000000"

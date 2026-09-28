@@ -34,6 +34,19 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as rl_canvas
 
+from openaec_reports.core.rich_text import (
+    Break,
+    LabelStyle,
+    Line,
+    Piece,
+    Space,
+    TextStyle,
+    label_piece,
+    layout_pieces,
+    runs_of,
+    text_pieces,
+)
+
 if TYPE_CHECKING:
     from openaec_reports.core.tenant import TenantConfig  # noqa: F401
 
@@ -511,6 +524,43 @@ class FontManager:
             return self._fitz_fonts[fontname]
         is_bold = "bold" in fontname.lower() or "Bold" in fontname
         return self._bold_font if is_bold else self._book_font
+
+    def get_variant(
+        self,
+        base_fontname: str,
+        *,
+        bold: bool = False,
+        italic: bool = False,
+        bold_fontname: str | None = None,
+        italic_fontname: str | None = None,
+    ) -> fitz.Font:
+        """Font voor opgemaakte runs: vet, cursief of beide.
+
+        Zonder opmaak is dit ``get_fitz_font(base_fontname)``, zodat runs
+        hetzelfde font krijgen als gewone tekst. Voor vet en cursief eerst
+        de template-namen (``fonts.bold`` / ``fonts.book_italic``), anders
+        de Liberation-variant. Vet-cursief valt terug op Liberation
+        BoldItalic, of vet als dat bestand ontbreekt.
+        """
+        if bold and italic:
+            cached = self._fitz_fonts.get("LiberationSans-BoldItalic")
+            if cached is not None:
+                return cached
+            path = self._find_font_path("LiberationSans-BoldItalic.ttf")
+            if path is None:
+                return self._bold_font
+            font = fitz.Font(fontfile=str(path))
+            self._fitz_fonts["LiberationSans-BoldItalic"] = font
+            return font
+        if bold:
+            if bold_fontname and bold_fontname in self._fitz_fonts:
+                return self._fitz_fonts[bold_fontname]
+            return self._bold_font
+        if italic:
+            if italic_fontname and italic_fontname in self._fitz_fonts:
+                return self._fitz_fonts[italic_fontname]
+            return self._liberation_italic
+        return self.get_fitz_font(base_fontname)
 
     def measure(self, text: str, fontsize: float, bold: bool = False) -> float:
         """Measure text width using font metrics."""
@@ -1785,6 +1835,169 @@ class ContentRenderer:
         )
         self.y += t["size"] + s.get("spacing_after", 20.5)
 
+    # --- Opgemaakte tekst (runs) ---
+
+    # Labelsoort -> (semantische randkleur, tekstkleur, vulkleur); None = geen.
+    _LABEL_SEMANTICS: dict[str, tuple[str | None, str, str | None]] = {
+        "ntb": ("text_light", "text_light", None),
+        "bron": (None, "paper", "secondary"),
+        "ok": ("secondary", "primary", None),
+        "nvt": ("separator", "text_light", "surface"),
+        "fout": ("warning", "warning", None),
+    }
+    # Nederlandse kleurnamen in runs -> semantische merkkleur.
+    _COLOR_ALIASES: dict[str, str] = {
+        "grijs": "text_light",
+        "rood": "warning",
+        "inkt": "text",
+        "accent": "text_accent",
+    }
+
+    def _run_color(self, value: object, default: str) -> str:
+        """Kleur van een run: #RRGGBB, merkkleur (``text_light``) of alias (``grijs``)."""
+        if not value:
+            return default
+        name = str(value).strip()
+        if re.fullmatch(r"#[0-9A-Fa-f]{6}", name):
+            return name
+        name = name.removeprefix("$colors.")
+        name = self._COLOR_ALIASES.get(name, name)
+        colors = getattr(self._brand_config, "colors", None) or {}
+        if name in colors:
+            return colors[name]
+        logger.warning("Onbekende runkleur '%s'; basiskleur gebruikt", value)
+        return default
+
+    def _label_style(self, kind: str, base_size: float) -> LabelStyle:
+        """Labelopmaak uit ``blocks.label`` met semantische merkkleuren als basis."""
+        cfg = self.blocks.get("label", {})
+        if kind not in self._LABEL_SEMANTICS:
+            logger.warning("Onbekende labelsoort '%s'; 'ntb' gebruikt", kind)
+            kind = "ntb"
+        kind_cfg = {**cfg.get("kinds", {}).get(kind, {})}
+        border_sem, text_sem, fill_sem = self._LABEL_SEMANTICS[kind]
+        block = f"label.{kind}"
+        border = (
+            self._color(kind_cfg, "border", border_sem, f"{block}.border")
+            if border_sem or kind_cfg.get("border") else None
+        )
+        fill = (
+            self._color(kind_cfg, "fill", fill_sem, f"{block}.fill")
+            if fill_sem or kind_cfg.get("fill") else None
+        )
+        text_color = self._color(kind_cfg, "text", text_sem, f"{block}.text")
+        compact = kind == "bron"
+        default_size = round(base_size * (0.65 if compact else 0.68), 2)
+        size = kind_cfg.get("size", cfg.get("size", default_size))
+        font_name = kind_cfg.get("font", cfg.get("font"))
+        font = (
+            self.fonts.get_fitz_font(font_name) if font_name
+            else self.fonts.get_variant("", bold=True, bold_fontname=self._font_role("bold"))
+        )
+        return LabelStyle(
+            font=font,
+            size=float(size),
+            text_color=text_color,
+            border_color=border,
+            fill_color=fill,
+            pad_x=float(kind_cfg.get("pad_x", cfg.get("pad_x", 2.8 if compact else 3.7))),
+            pad_y=float(kind_cfg.get("pad_y", cfg.get("pad_y", 0.4 if compact else 0.85))),
+            radius=float(kind_cfg.get("radius", cfg.get("radius", 1.7))),
+            line_width=float(kind_cfg.get("line_width", cfg.get("line_width", 0.7))),
+        )
+
+    def _label_text(self, kind: str, text: str) -> str:
+        """Chips in hoofdletters (zoals de BVP-opmaak), bronlabels niet; instelbaar."""
+        cfg = self.blocks.get("label", {})
+        kind_cfg = cfg.get("kinds", {}).get(kind, {})
+        upper = kind_cfg.get("uppercase", cfg.get("uppercase", kind != "bron"))
+        return text.upper() if upper else text
+
+    def _font_role(self, role: str) -> str | None:
+        """Fontnaam uit ``content_styles.fonts`` (``bold``, ``book_italic``)."""
+        return (self.tpl.content_styles.get("fonts") or {}).get(role)
+
+    def _rich_items(
+        self, runs: list[dict], fontname: str, size: float, color: str,
+    ) -> list[Piece | Space | Break]:
+        """Zet runs om in meetbare stukken voor ``layout_pieces``."""
+        items: list[Piece | Space | Break] = []
+        styles: dict[tuple, TextStyle] = {}
+        for run in runs:
+            if not isinstance(run, dict):
+                run = {"text": str(run)}
+            label = run.get("label")
+            if label:
+                if not isinstance(label, dict):
+                    label = {"text": str(label)}
+                kind = str(label.get("kind", "ntb"))
+                text = self._label_text(kind, str(label.get("text", "")))
+                items.append(label_piece(text, self._label_style(kind, size)))
+                continue
+            bold = bool(run.get("bold"))
+            italic = bool(run.get("italic"))
+            run_color = self._run_color(run.get("color"), color)
+            key = (bold, italic, run_color)
+            style = styles.get(key)
+            if style is None:
+                font = self.fonts.get_variant(
+                    fontname, bold=bold, italic=italic,
+                    bold_fontname=self._font_role("bold"),
+                    italic_fontname=self._font_role("book_italic"),
+                )
+                style = styles[key] = TextStyle(font, size, run_color)
+            items.extend(text_pieces(str(run.get("text", "")), style))
+        return items
+
+    def _layout_runs(
+        self, runs: list[dict], fontname: str, size: float, color: str, max_width: float,
+    ) -> list[Line]:
+        return layout_pieces(self._rich_items(runs, fontname, size, color), max_width)
+
+    def _draw_rich_line(self, line: Line, x: float, y_td: float, base_size: float) -> None:
+        """Teken een opgemaakte regel; alle stukken delen de basislijn van de basistekst."""
+        if not self.page:
+            return
+        baseline = y_td + base_size * 0.8
+        for px, piece in line.pieces:
+            if piece.label is not None:
+                lab = piece.label
+                box_h = lab.size * 1.2 + 2 * lab.pad_y
+                center = baseline - base_size * 0.33
+                rect = fitz.Rect(
+                    x + px, center - box_h / 2, x + px + piece.width, center + box_h / 2
+                )
+                self.page.draw_rect(
+                    rect,
+                    color=_hex_to_rgb(lab.border_color) if lab.border_color else None,
+                    fill=_hex_to_rgb(lab.fill_color) if lab.fill_color else None,
+                    width=lab.line_width if lab.border_color else 0,
+                    radius=min(0.5, lab.radius / max(box_h, 0.1)),
+                )
+                tw = fitz.TextWriter(self.page.rect)
+                tw.append(
+                    (x + px + lab.pad_x, center + lab.size * 0.35),
+                    piece.text, font=lab.font, fontsize=lab.size,
+                )
+                tw.write_text(self.page, color=_hex_to_rgb(lab.text_color))
+                continue
+            st = piece.style
+            tw = fitz.TextWriter(self.page.rect)
+            tw.append((x + px, baseline), piece.text, font=st.font, fontsize=st.size)
+            tw.write_text(self.page, color=_hex_to_rgb(st.color))
+
+    def rich_paragraph(self, runs: list[dict]) -> None:
+        """Paragraph met runs (vet, cursief, kleur, labels)."""
+        s = self.blocks.get("paragraph", {})
+        spacing_before = s.get("spacing_before", 12.0)
+        lines = self._layout_runs(runs, s["font"], s["size"], s["color"], s["max_width"])
+        self._check_overflow(spacing_before + len(lines) * s["line_height"])
+        self.y += spacing_before
+        for line in lines:
+            self._draw_rich_line(line, s["x"], self.y, s["size"])
+            self.y += s["line_height"]
+        self.y += s.get("spacing_after", 12.0)
+
     def paragraph(self, text: str) -> None:
         s = self.blocks.get("paragraph", {})
         spacing_before = s.get("spacing_before", 12.0)
@@ -1802,8 +2015,16 @@ class ContentRenderer:
         marker = sb.get("marker", {})
         text_s = sb.get("text", {})
         for item in items:
-            item = _strip_html(item)
-            lines = self.fonts.wrap_text(item, text_s["size"], text_s["max_width"])
+            runs = runs_of(item)
+            if runs is None and isinstance(item, dict):
+                item = str(item.get("text", ""))
+            if runs is not None:
+                lines = self._layout_runs(
+                    runs, text_s["font"], text_s["size"], text_s["color"], text_s["max_width"]
+                )
+            else:
+                item = _strip_html(item)
+                lines = self.fonts.wrap_text(item, text_s["size"], text_s["max_width"])
             needed = len(lines) * text_s["line_height"] + sb.get("spacing_between", 10.1)
             self._check_overflow(needed)
             # Bullet marker
@@ -1815,9 +2036,12 @@ class ContentRenderer:
                 marker["color"],
             )
             for line in lines:
-                self._text(
-                    text_s["x"], self.y, line, text_s["font"], text_s["size"], text_s["color"]
-                )
+                if runs is not None:
+                    self._draw_rich_line(line, text_s["x"], self.y, text_s["size"])
+                else:
+                    self._text(
+                        text_s["x"], self.y, line, text_s["font"], text_s["size"], text_s["color"]
+                    )
                 self.y += text_s["line_height"]
             self.y += sb.get("spacing_between", 10.1)
 
@@ -2735,6 +2959,8 @@ class ContentRenderer:
             elif style in ("Heading2", "heading_2"):
                 number = self._resolve_heading_number(2, block.get("number") or "")
                 self.heading_2(number, block.get("text", ""))
+            elif runs_of(block) is not None:
+                self.rich_paragraph(block["runs"])
             else:
                 self.paragraph(block.get("text", ""))
         elif block_type == "bullet_list":
