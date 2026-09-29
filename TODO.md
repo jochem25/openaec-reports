@@ -56,7 +56,8 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 - [x] Review 29-09 (sonnet + Ollama) verwerkt; zie commit
 - [x] BVP-proef v2: F1 lange titel breekt af voor verwijzing/paginanummer (kop + TOC), F2 tabelkop + 2 rijen (keep_rows) bij elkaar
 - [x] BVP-proef v2: F3 keep-with-next (heading_2 + alinea/checklist voor tabel), F6 check-run (aankruisvak in tekst en tabelcel)
-- [ ] kba-stijlronde F4/F5/F8 (+E11 kleuren) en kop/voet/streep-voorstel (E10), alleen tenant kba lokaal
+- [x] Engine: paginakader (pages.frame/frame_landscape), achterblad uit static_elements, colofon als inhoudspagina, tabelopties (kop zonder vulling, kapitalen, letterspatiering, rules, padding), page_number.hidden, header_label.draw
+- [ ] Tenant kba (lokaal, niet in git): huisstijlronde E10/E11/F4/F5/F8 klaar; deploy naar /opt/openaec/reports-tenants/kba op woord Jochem (diff: D:\dev\shared\uitvoer\report-engine\260929_tenant-kba_wijzigingen.diff)
 - [x] G0 tenant-fonts + bold-cellen gemerged in feat/bvp-engine (akkoord Jochem 29-09); baseline tests/baseline/3bm opnieuw vastgelegd
 - [x] E5 definition_list
 - [x] E8 part/reference in kop en inhoudsopgave
