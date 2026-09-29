@@ -37,12 +37,14 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as rl_canvas
 
 from openaec_reports.core.rich_text import (
+    BoxStyle,
     Break,
     LabelStyle,
     Line,
     Piece,
     Space,
     TextStyle,
+    box_piece,
     label_piece,
     layout_pieces,
     plain_text,
@@ -1629,6 +1631,9 @@ class ContentRenderer:
         self.header_label: str | dict = ""
         # Stationery-sleutel van de huidige pagina ("standaard", "bijlagen").
         self._page_template: str = ""
+        # Keep-with-next: ruimte die het volgende blok minimaal nodig heeft;
+        # een kop of een alinea voor een tabel verhuist anders mee (F3).
+        self._keep_next: float = 0.0
         self._section_counter: int = 0
         self._subsection_counter: int = 0
 
@@ -2111,6 +2116,7 @@ class ContentRenderer:
         extra = (len(title_lines) - 1) * line_h
         self._check_overflow(
             spacing_before + t.get("size", 13) + s.get("spacing_after", 20.5) + extra
+            + self._keep_next
         )
         # Log AFTER overflow check zodat het juiste paginanummer wordt
         # vastgelegd (ook als overflow een _new_page heeft getriggerd).
@@ -2217,6 +2223,16 @@ class ContentRenderer:
         for run in runs:
             if not isinstance(run, dict):
                 run = {"text": str(run)}
+            if "check" in run and not run.get("text") and not run.get("label"):
+                # Aankruisvak (F6): true = vinkje, false = leeg, null = leeg + n.t.b.
+                state = run["check"]
+                items.append(box_piece(bool(state), self._box_style(size)))
+                if state is None:
+                    unknown = self.blocks.get("checklist", {}).get("unknown_label", "n.t.b.")
+                    items.append(Space(size * 0.3))
+                    ntb_text = self._label_text("ntb", unknown)
+                    items.append(label_piece(ntb_text, self._label_style("ntb", size)))
+                continue
             label = run.get("label")
             if label:
                 if not isinstance(label, dict):
@@ -2240,6 +2256,16 @@ class ContentRenderer:
             items.extend(text_pieces(str(run.get("text", "")), style))
         return items
 
+    def _box_style(self, base_size: float) -> BoxStyle:
+        """Aankruisvak in runs: zelfde kleuren en lijndikte als het checklist-blok."""
+        cs = self.blocks.get("checklist", {})
+        return BoxStyle(
+            size=float(cs.get("box_size", 9.0)) * base_size / 9.5,
+            line_width=float(cs.get("box_line_width", 0.85)),
+            color=self._color(cs, "box_color", "primary", "checklist.box_color"),
+            check_color=self._color(cs, "check_color", "primary", "checklist.check_color"),
+        )
+
     def _layout_runs(
         self, runs: list[dict], fontname: str, size: float, color: str, max_width: float,
     ) -> list[Line]:
@@ -2251,6 +2277,27 @@ class ContentRenderer:
             return
         baseline = y_td + base_size * 0.8
         for px, piece in line.pieces:
+            if piece.box is not None:
+                box = piece.box
+                center = baseline - base_size * 0.33
+                rect = fitz.Rect(
+                    x + px, center - box.size / 2, x + px + box.size, center + box.size / 2
+                )
+                self.page.draw_rect(
+                    rect, color=_hex_to_rgb(box.color), fill=(1, 1, 1),
+                    width=box.line_width, radius=0.12,
+                )
+                if piece.checked:
+                    self.page.draw_polyline(
+                        [
+                            fitz.Point(rect.x0 + box.size * 0.22, rect.y0 + box.size * 0.52),
+                            fitz.Point(rect.x0 + box.size * 0.42, rect.y0 + box.size * 0.72),
+                            fitz.Point(rect.x0 + box.size * 0.78, rect.y0 + box.size * 0.28),
+                        ],
+                        color=_hex_to_rgb(box.check_color), width=box.line_width * 1.4,
+                        lineCap=1, lineJoin=1,
+                    )
+                continue
             if piece.label is not None:
                 lab = piece.label
                 box_h = lab.size * 1.2 + 2 * lab.pad_y
@@ -2277,12 +2324,72 @@ class ContentRenderer:
             tw.append((x + px, baseline), piece.text, font=st.font, fontsize=st.size)
             tw.write_text(self.page, color=_hex_to_rgb(st.color))
 
+    def _keep_estimate(self, block: dict | None, rest: list[dict]) -> float:
+        """Minimale ruimte die ``nxt`` direct na ``block`` nodig heeft (F3).
+
+        - Kop (heading_2, of paragraph met Heading-stijl): twee regels van
+          wat volgt (``blocks.heading_2.keep_with_next``, standaard 2 regels
+          lopende tekst), of het begin van een tabel. Volgt er een alinea
+          die zelf aan een tabel vastzit, dan die alinea plus dat begin.
+        - Alinea of checklist direct voor een tabel: het begin van de tabel
+          (titel, kop, eerste rijen), zodat de inleiding niet los staat.
+        Overige gevallen: 0 (ongewijzigd gedrag).
+        """
+        nxt = rest[0] if rest else None
+        if not block or not nxt:
+            return 0.0
+        btype = block.get("type")
+        is_heading = btype == "heading_2" or (
+            btype == "paragraph" and block.get("style") in ("Heading1", "heading_1",
+                                                           "Heading2", "heading_2")
+        )
+        if nxt.get("type") == "table" and (is_heading or btype in ("paragraph", "checklist")):
+            return self._table_keep_estimate(nxt)
+        after = rest[1] if len(rest) > 1 else None
+        if (
+            is_heading and after is not None and after.get("type") == "table"
+            and nxt.get("type") in ("paragraph", "checklist")
+        ):
+            return self._block_height_estimate(nxt) + self._table_keep_estimate(after)
+        if is_heading:
+            h2 = self.blocks.get("heading_2", {})
+            p = self.blocks.get("paragraph", {})
+            return float(h2.get("keep_with_next", 2 * p.get("line_height", 12.0)))
+        return 0.0
+
+    def _block_height_estimate(self, block: dict) -> float:
+        """Hoogte van een alinea (tekst of runs); anders twee regels."""
+        p = self.blocks.get("paragraph", {})
+        lh = p.get("line_height", 12.0)
+        if block.get("type") == "paragraph" and "font" in p:
+            runs = runs_of(block)
+            if runs:
+                n = len(self._layout_runs(runs, p["font"], p["size"], p["color"], p["max_width"]))
+            else:
+                n = len(self.fonts.wrap_text(
+                    _strip_html(block.get("text", "")), p["size"], p["max_width"],
+                    fontname=p["font"],
+                ))
+            return p.get("spacing_before", 12.0) + n * lh
+        return 2 * lh
+
+    def _table_keep_estimate(self, block: dict) -> float:
+        """Grove hoogte van tabeltitel + kop + eerste keep_rows rijen (enkelregelig)."""
+        s = self.blocks.get("table", {})
+        header_s, body_s = s.get("header", {}), s.get("body", {})
+        keep_rows = int(block.get("keep_rows", s.get("keep_rows", 2)))
+        rows = min(keep_rows, len(block.get("rows", [])))
+        header_h = max(header_s.get("size", 9) * 1.35 + 8, 20.0) if block.get("headers") else 0.0
+        row_h = body_s.get("size", 8) * 1.35 + 6
+        title_h = 16.0 if block.get("title") else 0.0
+        return s.get("spacing_before", 20.0) + title_h + header_h + rows * row_h
+
     def rich_paragraph(self, runs: list[dict]) -> None:
         """Paragraph met runs (vet, cursief, kleur, labels)."""
         s = self.blocks.get("paragraph", {})
         spacing_before = s.get("spacing_before", 12.0)
         lines = self._layout_runs(runs, s["font"], s["size"], s["color"], s["max_width"])
-        self._check_overflow(spacing_before + len(lines) * s["line_height"])
+        self._check_overflow(spacing_before + len(lines) * s["line_height"] + self._keep_next)
         self.y += spacing_before
         for line in lines:
             self._draw_rich_line(line, s["x"], self.y, s["size"])
@@ -2294,7 +2401,7 @@ class ContentRenderer:
         spacing_before = s.get("spacing_before", 12.0)
         text = _strip_html(text)
         lines = self.fonts.wrap_text(text, s["size"], s["max_width"], fontname=s["font"])
-        self._check_overflow(spacing_before + len(lines) * s["line_height"])
+        self._check_overflow(spacing_before + len(lines) * s["line_height"] + self._keep_next)
         self.y += spacing_before
         for line in lines:
             self._text(s["x"], self.y, line, s["font"], s["size"], s["color"])
@@ -2423,7 +2530,8 @@ class ContentRenderer:
         for start in range(0, len(laid_out), columns):
             row = laid_out[start:start + columns]
             row_h = max(len(lines) for _, lines in row) * line_h
-            self._check_overflow(row_h)
+            is_last = start + columns >= len(laid_out)
+            self._check_overflow(row_h + (self._keep_next if is_last else 0.0))
             for col, (checked, lines) in enumerate(row):
                 cx = x + col * (col_w + col_gap)
                 center = self.y + size * 0.8 - size * 0.33
@@ -3588,10 +3696,17 @@ class ContentRenderer:
             if level == 1:
                 self.heading_1(number, title, str(section.get("part") or ""), reference)
             elif level == 2:
+                self._keep_next = self._keep_estimate(
+                    {"type": "heading_2"}, section.get("content") or []
+                )
                 self.heading_2(number, title, reference)
+                self._keep_next = 0.0
 
-        for block in section.get("content", []):
+        content = section.get("content", [])
+        for i, block in enumerate(content):
+            self._keep_next = self._keep_estimate(block, content[i + 1:])
             self._render_block(block)
+            self._keep_next = 0.0
 
         # Add page number if this was a top-level section start
         if level == 1:

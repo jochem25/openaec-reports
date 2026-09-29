@@ -105,3 +105,19 @@ class TestLayout:
         items: list = [Piece("a", 1.0, BASE), Space(1.0), Break(), Piece("b", 1.0, BASE)]
         lines = layout_pieces(items, 100)
         assert lines[1].pieces[0][0] == 0.0
+
+
+class TestBoxPiece:
+    """F6: aankruisvak als ondeelbaar stuk; nooit samengevoegd met tekst of een ander vak."""
+
+    def test_boxes_not_merged(self):
+        from openaec_reports.core.rich_text import BoxStyle, box_piece
+
+        box = BoxStyle(9.0, 0.85, "#000000", "#000000")
+        items = [box_piece(True, box), Space(2.5), box_piece(False, box), *text_pieces(" ab", BASE)]
+        line = layout_pieces(items, 100)[0]
+        kinds = [(p.box is not None, p.checked, p.text) for _, p in line.pieces]
+        assert kinds == [(True, True, ""), (True, False, ""), (False, False, "ab")]
+
+    def test_plain_text_of_check(self):
+        assert plain_text([{"check": True}, {"text": " klaar"}]) == "[x] klaar"

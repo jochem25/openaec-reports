@@ -38,7 +38,9 @@ def plain_text(runs: list[dict]) -> str:
     parts: list[str] = []
     for run in runs:
         label = run.get("label")
-        if isinstance(label, dict):
+        if "check" in run and not run.get("text") and not label:
+            parts.append("[x]" if run["check"] else "[ ]")
+        elif isinstance(label, dict):
             parts.append(str(label.get("text", "")))
         elif label:
             parts.append(str(label))
@@ -72,13 +74,25 @@ class LabelStyle:
 
 
 @dataclass
+class BoxStyle:
+    """Aankruisvak in lopende tekst of een tabelcel."""
+
+    size: float
+    line_width: float
+    color: str
+    check_color: str
+
+
+@dataclass
 class Piece:
-    """Een ondeelbaar stuk: een woord(deel) in een stijl, of een label."""
+    """Een ondeelbaar stuk: een woord(deel) in een stijl, een label of een vak."""
 
     text: str
     width: float
     style: TextStyle | None = None
     label: LabelStyle | None = None
+    box: BoxStyle | None = None
+    checked: bool = False
 
 
 @dataclass
@@ -126,6 +140,11 @@ def label_piece(text: str, style: LabelStyle) -> Piece:
     return Piece(text, width, label=style)
 
 
+def box_piece(checked: bool, style: BoxStyle) -> Piece:
+    """Een aankruisvak als ondeelbaar stuk (leeg of met vinkje)."""
+    return Piece("", style.size, box=style, checked=checked)
+
+
 def _split_wide(piece: Piece, max_width: float) -> list[Piece]:
     """Knip een te breed tekststuk per teken op (laatste redmiddel)."""
     if piece.style is None:
@@ -150,7 +169,8 @@ def _append(line: Line, piece: Piece, lead: float) -> None:
     if line.pieces:
         last_x, last = line.pieces[-1]
         if (
-            last.label is None
+            piece.style is not None
+            and last.label is None
             and piece.label is None
             and last.style is piece.style
         ):
@@ -160,7 +180,9 @@ def _append(line: Line, piece: Piece, lead: float) -> None:
             line.width = last_x + last.width
             return
     x = line.width + (lead if line.pieces else 0.0)
-    line.pieces.append((x, Piece(piece.text, piece.width, piece.style, piece.label)))
+    line.pieces.append(
+        (x, Piece(piece.text, piece.width, piece.style, piece.label, piece.box, piece.checked))
+    )
     line.width = x + piece.width
 
 

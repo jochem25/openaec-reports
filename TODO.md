@@ -55,7 +55,8 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 - [x] E7 level-1 zonder paginabreuk via `continue_on_page: true` (niet via page_break_before: false, dat sturen clients standaard mee), keep-with-next
 - [x] Review 29-09 (sonnet + Ollama) verwerkt; zie commit
 - [x] BVP-proef v2: F1 lange titel breekt af voor verwijzing/paginanummer (kop + TOC), F2 tabelkop + 2 rijen (keep_rows) bij elkaar
-- [ ] BVP-proef v2: F3 keep-with-next heading_2/alinea voor tabel, F6 aankruisvak als run in tabelcel; F4/F5/F8 stijl kba (Jochem)
+- [x] BVP-proef v2: F3 keep-with-next (heading_2 + alinea/checklist voor tabel), F6 check-run (aankruisvak in tekst en tabelcel)
+- [ ] kba-stijlronde F4/F5/F8 (+E11 kleuren) en kop/voet/streep-voorstel (E10), alleen tenant kba lokaal
 - [x] G0 tenant-fonts + bold-cellen gemerged in feat/bvp-engine (akkoord Jochem 29-09); baseline tests/baseline/3bm opnieuw vastgelegd
 - [x] E5 definition_list
 - [x] E8 part/reference in kop en inhoudsopgave

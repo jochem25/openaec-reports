@@ -460,3 +460,39 @@ class TestTableBoldFont:
 
     def test_no_role_falls_back_to_liberation_bold(self):
         assert self.bold("SegoeUI", "SegoeUI", None) == "LiberationSans-Bold"
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "3bm" / "stationery" / "standaard.pdf").exists(),
+    reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
+)
+def test_keep_with_next(tmp_path, monkeypatch):
+    """F3: heading_2 niet los onderaan; inleidende alinea blijft bij de tabel."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    for height_mm in range(180, 216, 2):
+        content = [
+            {"type": "spacer", "height_mm": height_mm},
+            {"type": "heading_2", "number": "1.1", "title": "KopTwee"},
+            {"type": "paragraph", "text": "InleidingAlinea over de maatregelen."},
+            {"type": "table", "headers": ["KopA", "KopB"],
+             "rows": [["RijEen", "x"], ["RijTwee", "y"]]},
+        ]
+        data = {
+            "project": "F3", "template": "standaard",
+            "colofon": {"enabled": False}, "toc": {"enabled": False},
+            "backcover": {"enabled": False},
+            "sections": [{"title": "T", "content": content}],
+        }
+        out = tmp_path / f"f3_{height_mm}.pdf"
+        ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
+            data, TENANTS_DIR / "3bm" / "stationery", out
+        )
+        for page in fitz.open(str(out)):
+            text = page.get_text()
+            if "KopTwee" in text:
+                assert "InleidingAlinea" in text, f"kop los bij spacer {height_mm} mm"
+            if "InleidingAlinea" in text:
+                assert "KopA" in text, f"alinea los van tabel bij spacer {height_mm} mm"

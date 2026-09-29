@@ -764,8 +764,8 @@
 
     "rich_run": {
       "type": "object",
-      "description": "Stuk opgemaakte tekst, of een label",
-      "anyOf": [{ "required": ["text"] }, { "required": ["label"] }],
+      "description": "Stuk opgemaakte tekst, een label of een aankruisvak",
+      "anyOf": [{ "required": ["text"] }, { "required": ["label"] }, { "required": ["check"] }],
       "properties": {
         "text": { "type": "string", "description": "Tekst; \\n geeft een harde regelafbreking" },
         "bold": { "type": "boolean", "default": false },
@@ -774,7 +774,11 @@
           "type": "string",
           "description": "Semantische merkkleur (bijv. text_light, warning; aliassen grijs, rood, inkt, accent) of #RRGGBB"
         },
-        "label": { "$ref": "#/$defs/rich_label" }
+        "label": { "$ref": "#/$defs/rich_label" },
+        "check": {
+          "type": ["boolean", "null"],
+          "description": "Aankruisvak: true = vinkje, false = leeg vak, null = leeg vak met label n.t.b."
+        }
       }
     },
 

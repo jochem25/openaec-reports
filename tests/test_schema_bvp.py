@@ -155,3 +155,17 @@ class TestHeaderLabel:
         data = report({"type": "paragraph", "text": "a"})
         data["header_label"] = {"text": "x", "kind": "zzz"}
         assert errors(validator, data)
+
+
+class TestCheckRun:
+    def test_check_run_in_cell_and_paragraph(self, validator):
+        cell = {"runs": [{"check": None}]}
+        blocks = [
+            {"type": "paragraph", "runs": [{"check": True}, {"text": " gedaan"}]},
+            {"type": "table", "rows": [[cell, "maatregel"]]},
+        ]
+        assert errors(validator, report(*blocks)) == []
+
+    def test_check_must_be_bool_or_null(self, validator):
+        block = {"type": "paragraph", "runs": [{"check": "ja"}]}
+        assert errors(validator, report(block))
