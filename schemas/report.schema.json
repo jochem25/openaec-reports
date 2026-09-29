@@ -325,6 +325,12 @@
           },
           "description": "Data rijen (2D array)"
         },
+        "keep_rows": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2,
+          "description": "Aantal eerste rijen dat met titel en kop op dezelfde pagina moet (renderer_v2)"
+        },
         "row_styles": {
           "type": "array",
           "description": "Rijstijlen per data-rij (0-geindexeerd)",
