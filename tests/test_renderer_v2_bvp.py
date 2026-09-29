@@ -364,3 +364,55 @@ class TestReviewFixes:
     def test_zero_cell_text_is_kept(self, fake):
         sp = ContentRenderer._cell_spec(fake, {"text": 0, "bold": True}, 0, 0, {})
         assert sp.text == "0"
+
+
+class TestTitleLines:
+    """F1: titel breekt af binnen de beschikbare breedte; past hij, dan ongewijzigd."""
+
+    def lines(self, fake, title, max_w):
+        return ContentRenderer._title_lines(fake, title, "Inter-Regular", 12.0, max_w)
+
+    def test_fits_single_line(self, fake_renderer):
+        assert self.lines(fake_renderer, "Korte titel", 500) == ["Korte titel"]
+
+    def test_wraps_within_width(self, fake_renderer):
+        title = "Bouwmethode, bouwplaatsinrichting en veiligheidszones"
+        out = self.lines(fake_renderer, title, 200)
+        font = fake_renderer.fonts.get_fitz_font("Inter-Regular")
+        assert len(out) > 1 and " ".join(out) == title
+        assert all(font.text_length(line, fontsize=12.0) <= 200 for line in out)
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "3bm" / "stationery" / "standaard.pdf").exists(),
+    reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
+)
+def test_table_header_not_orphaned(tmp_path, monkeypatch):
+    """F2: kop + de eerste 2 rijen staan op dezelfde pagina."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    # Spacer in stappen kleiner dan een tabelrij, zodat de kop ergens precies
+    # boven de paginabodem valt met ruimte voor 0 of 1 rij.
+    for height_mm in range(184, 204, 2):
+        content = [{"type": "spacer", "height_mm": height_mm}, {
+            "type": "table", "title": "Maatregelen", "headers": ["KopA", "KopB"],
+            "rows": [["RijEen", "x"], ["RijTwee", "y"], ["RijDrie", "z"]],
+        }]
+        data = {
+            "project": "F2", "template": "standaard",
+            "colofon": {"enabled": False}, "toc": {"enabled": False},
+            "backcover": {"enabled": False},
+            "sections": [{"title": "T", "content": content}],
+        }
+        out = tmp_path / f"f2_{height_mm}.pdf"
+        ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
+            data, TENANTS_DIR / "3bm" / "stationery", out
+        )
+        for page in fitz.open(str(out)):
+            text = page.get_text()
+            if "Maatregelen" in text:
+                assert "KopA" in text, f"tabeltitel los bij spacer {height_mm} mm"
+            if "KopA" in text and "RijDrie" not in text:
+                assert "RijEen" in text and "RijTwee" in text, f"wees bij spacer {height_mm} mm"

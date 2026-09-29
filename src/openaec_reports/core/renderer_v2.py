@@ -1796,17 +1796,12 @@ class ContentRenderer:
                     lv1.get("size", 12.0),
                     lv1_color,
                 )
-                self._text(
-                    lv1.get("title_x", 160.9),
-                    self.y,
-                    title,
-                    lv1.get("font", "Inter-Regular"),
-                    lv1.get("size", 12.0),
-                    lv1_color,
+                extra = self._toc_title(
+                    lv1, title, lv1_color, 12.0, pending_reference, str(pg)
                 )
                 self._text(
                     lv1.get("page_x", 515.4),
-                    self.y,
+                    self.y + extra,
                     str(pg),
                     lv1.get("font", "Inter-Regular"),
                     lv1.get("size", 12.0),
@@ -1814,9 +1809,10 @@ class ContentRenderer:
                 )
                 if pending_reference:
                     self._text_right(
-                        pending_reference[0], self.y + pending_reference[1], *pending_reference[2:]
+                        pending_reference[0], self.y + extra + pending_reference[1],
+                        *pending_reference[2:],
                     )
-                self.y += lv1.get("spacing_after", 20.0)
+                self.y += lv1.get("spacing_after", 20.0) + extra
             else:
                 self._check_overflow(17.3)
                 self._text(
@@ -1827,17 +1823,12 @@ class ContentRenderer:
                     lv2.get("size", 9.5),
                     lv2_color,
                 )
-                self._text(
-                    lv2.get("title_x", 160.9),
-                    self.y,
-                    title,
-                    lv2.get("font", "Inter-Regular"),
-                    lv2.get("size", 9.5),
-                    lv2_color,
+                extra = self._toc_title(
+                    lv2, title, lv2_color, 9.5, pending_reference, str(pg)
                 )
                 self._text(
                     lv2.get("page_x", 515.4),
-                    self.y,
+                    self.y + extra,
                     str(pg),
                     lv2.get("font", "Inter-Regular"),
                     lv2.get("size", 9.5),
@@ -1845,11 +1836,52 @@ class ContentRenderer:
                 )
                 if pending_reference:
                     self._text_right(
-                        pending_reference[0], self.y + pending_reference[1], *pending_reference[2:]
+                        pending_reference[0], self.y + extra + pending_reference[1],
+                        *pending_reference[2:],
                     )
-                self.y += lv2.get("spacing_after", 17.3)
+                self.y += lv2.get("spacing_after", 17.3) + extra
 
         self._add_page_number()
+
+    def _title_lines(self, title: str, fontname: str, size: float, max_w: float) -> list[str]:
+        """Titel als regels binnen ``max_w``; past hij, dan ongewijzigd een regel."""
+        font = self.fonts.get_fitz_font(fontname)
+        if max_w <= 0 or font.text_length(title, fontsize=size) <= max_w:
+            return [title]
+        lines = layout_pieces(text_pieces(title, TextStyle(font, size, "#000000")), max_w)
+        return [" ".join(p.text for _, p in line.pieces) for line in lines]
+
+    def _toc_title(
+        self,
+        lv: dict,
+        title: str,
+        color: str,
+        default_size: float,
+        pending_reference: tuple | None,
+        page_label: str,
+    ) -> float:
+        """TOC-titel, afgebroken voor de verwijzing of het paginanummer.
+
+        Returns:
+            Extra hoogte (regels na de eerste); paginanummer en verwijzing
+            komen op de laatste regel.
+        """
+        fontname = lv.get("font", "Inter-Regular")
+        size = lv.get("size", default_size)
+        title_x = lv.get("title_x", 160.9)
+        gap = lv.get("title_gap", 10.0)
+        if pending_reference:
+            ref_right, _, ref_text, ref_font, ref_size, _ = pending_reference
+            limit = ref_right - self.fonts.get_fitz_font(ref_font).text_length(
+                ref_text, fontsize=ref_size
+            )
+        else:
+            limit = lv.get("page_x", 515.4)
+        lines = self._title_lines(title, fontname, size, limit - gap - title_x)
+        line_h = lv.get("title_line_height", size * 1.25)
+        for i, line in enumerate(lines):
+            self._text(title_x, self.y + i * line_h, line, fontname, size, color)
+        return (len(lines) - 1) * line_h
 
     def render_toc_to_fresh_doc(
         self,
@@ -1938,7 +1970,14 @@ class ContentRenderer:
         t = s.get("title", {})
         part_s = s.get("part", {})
         part_h = (part_s.get("size", 9.0) + part_s.get("spacing_after", 8.0)) if part else 0.0
-        self._check_overflow(part_h + n.get("size", 18) + s.get("spacing_after", 33.9))
+        title_x = self._heading_title_x(s, number)
+        title_lines = self._title_lines(
+            title, t["font"], t["size"],
+            self._heading_title_limit(s, "heading_1", reference) - title_x,
+        )
+        line_h = t.get("line_height", t["size"] * 1.2)
+        extra = (len(title_lines) - 1) * line_h
+        self._check_overflow(part_h + n.get("size", 18) + s.get("spacing_after", 33.9) + extra)
         # Log AFTER overflow check: current_page_nr reflects the actual
         # page waarop de heading getekend wordt.
         self.heading_log.append(
@@ -1952,11 +1991,27 @@ class ContentRenderer:
             )
             self.y += part_h
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
-        title_x = self._heading_title_x(s, number)
-        self._text(title_x, self.y, title, t["font"], t["size"], t["color"])
+        for i, line in enumerate(title_lines):
+            self._text(title_x, self.y + i * line_h, line, t["font"], t["size"], t["color"])
         if reference:
             self._heading_reference(s, "heading_1", reference, self.y, t["size"])
-        self.y += n["size"] + s.get("spacing_after", 33.9)
+        self.y += n["size"] + s.get("spacing_after", 33.9) + extra
+
+    def _heading_title_limit(self, style: dict, block: str, reference: str) -> float:
+        """Rechtergrens van de koptitel: voor de verwijzing, anders de tekstkolom."""
+        ref_s = style.get("reference", {})
+        p = self.blocks.get("paragraph", {})
+        right = ref_s.get("right_x", p.get("x", 125.4) + p.get("max_width", 393.0))
+        if not reference:
+            # Zonder verwijzing de paginabreedte min marge: bestaande koppen die
+            # tot voorbij de tekstkolom lopen, blijven zo op een regel.
+            page_w = self.page.rect.width if self.page else A4_PORTRAIT_WIDTH
+            return style.get("title_right_x", page_w - 36.0)
+        font = self.fonts.get_fitz_font(
+            ref_s.get("font", style.get("title", {}).get("font", "Inter-Regular"))
+        )
+        width = font.text_length(reference, fontsize=ref_s.get("size", 9.0))
+        return right - width - ref_s.get("gap", 12.0)
 
     def _heading_reference(
         self, style: dict, block: str, reference: str, y_td: float, title_size: float,
@@ -1985,19 +2040,29 @@ class ContentRenderer:
         n = s.get("number", {})
         t = s.get("title", {})
         spacing_before = s.get("spacing_before", 30.0)
-        self._check_overflow(spacing_before + t.get("size", 13) + s.get("spacing_after", 20.5))
+        title_x = self._heading_title_x(s, number)
+        title_lines = self._title_lines(
+            title, t["font"], t["size"],
+            self._heading_title_limit(s, "heading_2", reference) - title_x,
+        )
+        line_h = t.get("line_height", t["size"] * 1.2)
+        extra = (len(title_lines) - 1) * line_h
+        self._check_overflow(
+            spacing_before + t.get("size", 13) + s.get("spacing_after", 20.5) + extra
+        )
         # Log AFTER overflow check zodat het juiste paginanummer wordt
         # vastgelegd (ook als overflow een _new_page heeft getriggerd).
         self.heading_log.append((2, number, title, self._display_page_nr(), "", reference or ""))
         self.y += spacing_before
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
         y_title = self.y - (t["size"] - n["size"]) * 0.3
-        self._text(
-            self._heading_title_x(s, number), y_title, title, t["font"], t["size"], t["color"]
-        )
+        for i, line in enumerate(title_lines):
+            self._text(
+                title_x, y_title + i * line_h, line, t["font"], t["size"], t["color"]
+            )
         if reference:
             self._heading_reference(s, "heading_2", reference, y_title, t["size"])
-        self.y += t["size"] + s.get("spacing_after", 20.5)
+        self.y += t["size"] + s.get("spacing_after", 20.5) + extra
 
     # --- Opgemaakte tekst (runs) ---
 
@@ -2568,11 +2633,54 @@ class ContentRenderer:
             header_h = 0.0
 
         spacing_before = s.get("spacing_before", 20.0)
+        b_color_hex = self._color(body_s, "color", "primary", "table.body.text")
+
+        def wrap_row(row_specs: list[_CellSpec]) -> tuple[list[list], float]:
+            """Celregels en rijhoogte. Gewone cellen als (text, is_bold)-regels,
+            opgemaakte cellen als rich_text-regels."""
+            row_wrapped: list[list] = []
+            for i in range(num_cols):
+                spec = row_specs[i] if i < len(row_specs) else _CellSpec("", False)
+                w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
+                if spec.rich:
+                    row_wrapped.append(self._layout_runs(
+                        spec.as_runs(), b_fontname, b_fontsize,
+                        spec.color or b_color_hex, w - cell_pad * 2,
+                    ))
+                    continue
+                lines = self.fonts.wrap_text(
+                    spec.text, b_fontsize, w - cell_pad * 2, bold=spec.bold
+                )
+                wrapped_lines = lines if lines else [""]
+                row_wrapped.append([(line, spec.bold) for line in wrapped_lines])
+            max_lines = max(len(lines) for lines in row_wrapped)
+            return row_wrapped, max(max_lines * cell_line_h + 6, cell_line_h + 6)
+
+        def row_height(idx: int) -> float:
+            if idx not in group_rows:
+                return wrap_row(specs[idx])[1]
+            spec = next((sp for sp in specs[idx] if sp.text or sp.runs), _CellSpec("", False))
+            runs = [
+                r if "label" in r else {**r, "bold": True}
+                for r in (spec.runs or [{"text": spec.text}])
+            ]
+            lines = self._layout_runs(
+                runs, b_fontname, b_fontsize, b_color_hex, max_w - cell_pad * 2
+            )
+            return max(len(lines) * cell_line_h + 6, cell_line_h + 6)
+
+        # Kop niet los onderaan een pagina: kop + de eerste keep_rows rijen
+        # (standaard 2) moeten samen passen, anders begint de tabel op een
+        # nieuwe pagina. Begrensd op een volle pagina.
+        keep_rows = int(block.get("keep_rows", s.get("keep_rows", 2)))
+        keep_h = header_h + sum(row_height(i) for i in range(min(keep_rows, len(specs))))
+        top = self.tpl.standaard.get("margins", {}).get("top", 74.9)
+        keep_h = min(keep_h, self.y_max - top - spacing_before - 16)
 
         # Title above table
         if title:
             title_s = s.get("title", {})
-            self._check_overflow(spacing_before + 16 + header_h)
+            self._check_overflow(spacing_before + 16 + max(header_h, keep_h))
             self.y += spacing_before
             self._text(
                 x, self.y, title,
@@ -2582,7 +2690,7 @@ class ContentRenderer:
             )
             self.y += 16
         else:
-            self._check_overflow(spacing_before + header_h + cell_line_h + 8)
+            self._check_overflow(spacing_before + max(header_h + cell_line_h + 8, keep_h))
             self.y += spacing_before
 
         self._check_overflow(header_h + cell_line_h + 8)  # at least header + 1 row line
@@ -2630,7 +2738,6 @@ class ContentRenderer:
         # Bold body font name (via centrale helper). Valt terug op de
         # header font wanneer die niet direct afgeleid kan worden.
         b_bold_fontname = _derive_bold_fontname(b_fontname, fallback_bold=h_fontname)
-        b_color_hex = self._color(body_s, "color", "primary", "table.body.text")
         group_s = s.get("group", {})
 
         # --- Body rows ---
@@ -2641,25 +2748,7 @@ class ContentRenderer:
                     group_s, grid_color, render_header, header_h,
                 )
                 continue
-            # Pre-wrap all cells to determine row height. Gewone cellen als
-            # (text, is_bold)-regels, opgemaakte cellen als rich_text-regels.
-            row_wrapped: list[list] = []
-            for i in range(num_cols):
-                spec = row_specs[i] if i < len(row_specs) else _CellSpec("", False)
-                w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
-                if spec.rich:
-                    row_wrapped.append(self._layout_runs(
-                        spec.as_runs(), b_fontname, b_fontsize,
-                        spec.color or b_color_hex, w - cell_pad * 2,
-                    ))
-                    continue
-                lines = self.fonts.wrap_text(
-                    spec.text, b_fontsize, w - cell_pad * 2, bold=spec.bold
-                )
-                wrapped_lines = lines if lines else [""]
-                row_wrapped.append([(line, spec.bold) for line in wrapped_lines])
-            max_lines = max(len(lines) for lines in row_wrapped)
-            row_h = max(max_lines * cell_line_h + 6, cell_line_h + 6)
+            row_wrapped, row_h = wrap_row(row_specs)
 
             if self._check_overflow(row_h):
                 # Re-render header on new page

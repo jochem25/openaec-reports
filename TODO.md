@@ -54,6 +54,9 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 - [x] E4 checklist-blok (1/2 kolommen, checked true/false/null)
 - [x] E7 level-1 zonder paginabreuk via `continue_on_page: true` (niet via page_break_before: false, dat sturen clients standaard mee), keep-with-next
 - [x] Review 29-09 (sonnet + Ollama) verwerkt; zie commit
+- [x] BVP-proef v2: F1 lange titel breekt af voor verwijzing/paginanummer (kop + TOC), F2 tabelkop + 2 rijen (keep_rows) bij elkaar
+- [ ] BVP-proef v2: F3 keep-with-next heading_2/alinea voor tabel, F6 aankruisvak als run in tabelcel; F4/F5/F8 stijl kba (Jochem)
+- [ ] Branches fix/g0-tenant-fonts en fix/bold-cells: wachten op controle planner/Jochem, dan mergen in feat/bvp-engine
 - [x] E5 definition_list
 - [x] E8 part/reference in kop en inhoudsopgave
 - [x] E9 statuslabel in kop (`header_label`; kba-brand heeft geen kopelementen)
