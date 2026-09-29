@@ -50,13 +50,13 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 - [x] E1 heading-nummerbreedte: titel schuift op bij breder nummer (`_heading_title_x`)
 - [x] E2 runs met labels in paragraph en bullet_list (`core/rich_text.py`); cellen volgen met E3
 - [x] E3 celobjecten (runs, bg_color, align, ...), cell_styles, row_styles group, tabel zonder kop
-- [ ] Legacy `<b>`-cellen in tabellen renderen in kba/3bm als Regular (bold-font valt terug); fix wijzigt bestaande PDF's, besluit nodig
+- [x] Legacy `<b>`-cellen vet (fix/bold-cells, gemerged)
 - [x] E4 checklist-blok (1/2 kolommen, checked true/false/null)
 - [x] E7 level-1 zonder paginabreuk via `continue_on_page: true` (niet via page_break_before: false, dat sturen clients standaard mee), keep-with-next
 - [x] Review 29-09 (sonnet + Ollama) verwerkt; zie commit
 - [x] BVP-proef v2: F1 lange titel breekt af voor verwijzing/paginanummer (kop + TOC), F2 tabelkop + 2 rijen (keep_rows) bij elkaar
 - [ ] BVP-proef v2: F3 keep-with-next heading_2/alinea voor tabel, F6 aankruisvak als run in tabelcel; F4/F5/F8 stijl kba (Jochem)
-- [ ] Branches fix/g0-tenant-fonts en fix/bold-cells: wachten op controle planner/Jochem, dan mergen in feat/bvp-engine
+- [x] G0 tenant-fonts + bold-cellen gemerged in feat/bvp-engine (akkoord Jochem 29-09); baseline tests/baseline/3bm opnieuw vastgelegd
 - [x] E5 definition_list
 - [x] E8 part/reference in kop en inhoudsopgave
 - [x] E9 statuslabel in kop (`header_label`; kba-brand heeft geen kopelementen)

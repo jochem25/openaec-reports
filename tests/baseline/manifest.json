@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-10T14:00:51.425347+00:00",
+  "generated_at": "2026-09-29T09:48:57.050203+00:00",
   "raster_dpi": 100,
   "fixture": "tests\\fixtures\\baseline_report.json",
   "reports": [
@@ -14,27 +14,27 @@
         },
         {
           "file": "page_002.png",
-          "sha256": "4899533f3ad34cf77e8bf8c3d60d5ed5402c53ee571d8002c8f43f8914929eca"
+          "sha256": "49ceb2f6c18e4f66c9e24c8262f6bb2841d6f5c5832318e90c2138c23d026a79"
         },
         {
           "file": "page_003.png",
-          "sha256": "24a08d89e209b76323df260aa32b76e58ee8951f84cf26a50151cf758eae5bf0"
+          "sha256": "1e31fc2de6d8e9cdb3be3fecc6f7d9b7fc19a18aed67f0701698510f17847c77"
         },
         {
           "file": "page_004.png",
-          "sha256": "566a6b43c23a7c5deea14630ea68377220610dc517d4d45676fa20d2ae728683"
+          "sha256": "1d28beaa4a9282540d6f22db9c3a70f3de10f65570f871ec8e57284b47d56a25"
         },
         {
           "file": "page_005.png",
-          "sha256": "f687ccd7f673fec197bcc954ffd78434e6ec4b6ffcf3849c451248a0207de4b8"
+          "sha256": "5a5566643366af3363fca130027e9f78a4a2042f1b5eca5c974508ea2ab4334b"
         },
         {
           "file": "page_006.png",
-          "sha256": "cbb67b363eec5764bb87b2e5f6734a8ff44d86b0d578111554cecabd7e7c6db0"
+          "sha256": "39128fe483524eb2770fe3c3eed03950f9a6086a2d704c0621217609cec5e7ed"
         },
         {
           "file": "page_007.png",
-          "sha256": "1dc2d9252519c40ee2314f48e028fd758959562329534575884dc33155ccc5e7"
+          "sha256": "11368a68f9e74a62610668380a075571c249c03ad8e5b58159cd59f7a64b019e"
         },
         {
           "file": "page_008.png",
