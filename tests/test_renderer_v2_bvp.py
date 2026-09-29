@@ -416,3 +416,28 @@ def test_table_header_not_orphaned(tmp_path, monkeypatch):
                 assert "KopA" in text, f"tabeltitel los bij spacer {height_mm} mm"
             if "KopA" in text and "RijDrie" not in text:
                 assert "RijEen" in text and "RijTwee" in text, f"wees bij spacer {height_mm} mm"
+
+
+class TestFontByName:
+    """G0: template-fontnamen resolven naar het font-bestand in de cascade."""
+
+    @pytest.fixture
+    def fm(self, tmp_path):
+        from openaec_reports.core.renderer_v2 import FONT_DIR
+
+        # Liberation Bold onder een tenant-achtige naam: meetbaar anders dan book.
+        (tmp_path / "Testfont-Book.ttf").write_bytes(
+            (FONT_DIR / "LiberationSans-Bold.ttf").read_bytes()
+        )
+        return FontManager(font_dir=tmp_path)
+
+    def test_stripped_name_resolves_file(self, fm):
+        assert fm.get_fitz_font("TestfontBook").name == "Liberation Sans Bold"
+        assert fm.get_fitz_font("Testfont-Book").name == "Liberation Sans Bold"
+
+    def test_unknown_name_falls_back(self, fm):
+        assert fm.get_fitz_font("BestaatNiet") is fm.get_fitz_font("OokNiet")
+
+    def test_measure_uses_named_font(self, fm):
+        text = "Bouwveiligheidsplan"
+        assert fm.measure(text, 10, fontname="TestfontBook") > fm.measure(text, 10)

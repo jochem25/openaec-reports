@@ -393,6 +393,7 @@ class FontManager:
 
         self._rl_registered = False
         self._fitz_fonts: dict[str, fitz.Font] = {}
+        self._missing_fonts: set[str] = set()
         self._uses_custom_fonts = True
 
         # Laad Liberation Sans als embedded fallback (altijd)
@@ -544,10 +545,50 @@ class FontManager:
                 if path is not None:
                     page.insert_font(fontname=name, fontfile=str(path))
 
+    def _find_font_by_name(self, fontname: str) -> fitz.Font | None:
+        """Laad een font uit de cascade op naam, zoals ``register_reportlab`` registreert.
+
+        Match op bestandsstam (``Gotham-Book``) of op de stam zonder ``-``,
+        ``_`` en spaties (``GothamBook``), hoofdletterongevoelig; .ttf gaat
+        voor .otf. Resultaat wordt gecachet onder ``fontname``.
+        """
+        key = fontname.replace("-", "").replace("_", "").replace(" ", "").lower()
+        if not key:
+            return None
+        for suffix in (".ttf", ".otf"):
+            for base in self._font_cascade:
+                if not base.exists():
+                    continue
+                for path in sorted(base.glob(f"*{suffix}")):
+                    stem = path.stem
+                    stripped = stem.replace("-", "").replace("_", "").replace(" ", "").lower()
+                    if stem.lower() == fontname.lower() or stripped == key:
+                        try:
+                            font = fitz.Font(fontfile=str(path))
+                        except (RuntimeError, ValueError) as e:  # pragma: no cover
+                            logger.warning("Font %s niet te laden: %s", path, e)
+                            return None
+                        self._fitz_fonts[fontname] = font
+                        return font
+        return None
+
     def get_fitz_font(self, fontname: str) -> fitz.Font:
-        """Return fitz.Font object for given fontname string."""
+        """Return fitz.Font object for given fontname string.
+
+        Volgorde: geladen fonts, dan een font-bestand met die naam in de
+        tenant-cascade (bijv. ``SegoeUI`` -> ``SegoeUI.ttf``), dan de
+        fallback (Inter of Liberation; vet als de naam 'bold' bevat).
+        """
         if fontname in self._fitz_fonts:
             return self._fitz_fonts[fontname]
+        if fontname in self._missing_fonts:
+            found = None
+        else:
+            found = self._find_font_by_name(fontname)
+            if found is None:
+                self._missing_fonts.add(fontname)
+        if found is not None:
+            return found
         is_bold = "bold" in fontname.lower() or "Bold" in fontname
         return self._bold_font if is_bold else self._book_font
 
@@ -579,22 +620,40 @@ class FontManager:
             self._fitz_fonts["LiberationSans-BoldItalic"] = font
             return font
         if bold:
-            if bold_fontname and bold_fontname in self._fitz_fonts:
-                return self._fitz_fonts[bold_fontname]
+            if bold_fontname:
+                return self.get_fitz_font(bold_fontname)
             return self._bold_font
         if italic:
-            if italic_fontname and italic_fontname in self._fitz_fonts:
-                return self._fitz_fonts[italic_fontname]
+            if italic_fontname:
+                found = self._fitz_fonts.get(italic_fontname) or self._find_font_by_name(
+                    italic_fontname
+                )
+                if found is not None:
+                    return found
             return self._liberation_italic
         return self.get_fitz_font(base_fontname)
 
-    def measure(self, text: str, fontsize: float, bold: bool = False) -> float:
-        """Measure text width using font metrics."""
-        font = self._bold_font if bold else self._book_font
+    def measure(
+        self, text: str, fontsize: float, bold: bool = False, fontname: str | None = None,
+    ) -> float:
+        """Measure text width using font metrics.
+
+        Met ``fontname`` wordt gemeten met het font waarmee ook getekend
+        wordt (``get_fitz_font``); zonder valt het terug op book/bold.
+        """
+        if fontname:
+            font = self.get_fitz_font(fontname)
+        else:
+            font = self._bold_font if bold else self._book_font
         return font.text_length(text, fontsize=fontsize)
 
     def wrap_text(
-        self, text: str, fontsize: float, max_width: float, bold: bool = False
+        self,
+        text: str,
+        fontsize: float,
+        max_width: float,
+        bold: bool = False,
+        fontname: str | None = None,
     ) -> list[str]:
         """Word-wrap text to fit within max_width.
 
@@ -613,7 +672,7 @@ class FontManager:
 
         for token in tokens:
             test = f"{current} {token}".strip()
-            if self.measure(test, fontsize, bold) <= max_width:
+            if self.measure(test, fontsize, bold, fontname) <= max_width:
                 current = test
                 continue
 
@@ -623,7 +682,7 @@ class FontManager:
                 current = ""
 
             # Check if single token fits on a fresh line
-            if self.measure(token, fontsize, bold) <= max_width:
+            if self.measure(token, fontsize, bold, fontname) <= max_width:
                 current = token
                 continue
 
@@ -633,17 +692,20 @@ class FontManager:
                 if not sp:
                     continue
                 test = f"{current}{sp}" if current else sp
-                if self.measure(test, fontsize, bold) <= max_width:
+                if self.measure(test, fontsize, bold, fontname) <= max_width:
                     current = test
                 else:
                     if current:
                         lines.append(current)
                     # If sub-part itself is too wide, break by character
-                    if self.measure(sp, fontsize, bold) > max_width:
+                    if self.measure(sp, fontsize, bold, fontname) > max_width:
                         current = ""
                         for ch in sp:
                             test_ch = current + ch
-                            if self.measure(test_ch, fontsize, bold) > max_width and current:
+                            if (
+                                self.measure(test_ch, fontsize, bold, fontname) > max_width
+                                and current
+                            ):
                                 lines.append(current)
                                 current = ch
                             else:
@@ -1236,7 +1298,7 @@ class ColofonGenerator:
             logical_lines: list[str] = []
             for raw_line in text.split("\n"):
                 wrapped = self.fonts.wrap_text(
-                    raw_line, value_size, value_max_w, bold=value_bold
+                    raw_line, value_size, value_max_w, bold=value_bold, fontname=value_font
                 )
                 logical_lines.extend(wrapped if wrapped else [""])
             for i, line in enumerate(logical_lines):
@@ -1422,7 +1484,7 @@ class ColofonGenerator:
         max_w = max(50.0, page_w - x - right_margin)
         bold = "Bold" in font_name
         font_obj = self.fonts.get_fitz_font(font_name)
-        lines = self.fonts.wrap_text(value, size, max_w, bold=bold)
+        lines = self.fonts.wrap_text(value, size, max_w, bold=bold, fontname=font_name)
         for i, line in enumerate(lines):
             tw = fitz.TextWriter(page.rect)
             tw.append(
@@ -2231,7 +2293,7 @@ class ContentRenderer:
         s = self.blocks.get("paragraph", {})
         spacing_before = s.get("spacing_before", 12.0)
         text = _strip_html(text)
-        lines = self.fonts.wrap_text(text, s["size"], s["max_width"])
+        lines = self.fonts.wrap_text(text, s["size"], s["max_width"], fontname=s["font"])
         self._check_overflow(spacing_before + len(lines) * s["line_height"])
         self.y += spacing_before
         for line in lines:
@@ -2253,7 +2315,9 @@ class ContentRenderer:
                 )
             else:
                 item = _strip_html(item)
-                lines = self.fonts.wrap_text(item, text_s["size"], text_s["max_width"])
+                lines = self.fonts.wrap_text(
+                    item, text_s["size"], text_s["max_width"], fontname=text_s["font"]
+                )
             needed = len(lines) * text_s["line_height"] + sb.get("spacing_between", 10.1)
             self._check_overflow(needed)
             # Bullet marker
@@ -2532,6 +2596,10 @@ class ContentRenderer:
         ]
 
         # --- Resolve column widths ---
+        # Meten met de fonts waarmee ook getekend wordt.
+        h_font_m = header_s.get("font", "Inter-Bold")
+        b_font_m = body_s.get("font", "Inter-Regular")
+        b_bold_font_m = _derive_bold_fontname(b_font_m, fallback_bold=h_font_m)
         cell_pad = 5  # horizontal padding per side
         if raw_widths and len(raw_widths) >= num_cols:
             total = sum(raw_widths[:num_cols])
@@ -2545,13 +2613,16 @@ class ContentRenderer:
             measured = []
             for i in range(num_cols):
                 h_text = headers[i] if i < len(headers) else ""
-                max_cell_w = self.fonts.measure(h_text, header_font_size, bold=True)
+                max_cell_w = self.fonts.measure(
+                    h_text, header_font_size, bold=True, fontname=h_font_m
+                )
                 body_font_size = body_s.get("size", 8)
                 for row in rows[:10]:
                     if i < len(row):
                         cell_text, cell_bold = row[i]
                         cell_w = self.fonts.measure(
-                            cell_text, body_font_size, bold=cell_bold
+                            cell_text, body_font_size, bold=cell_bold,
+                            fontname=b_bold_font_m if cell_bold else b_font_m,
                         )
                         max_cell_w = max(max_cell_w, cell_w)
                 measured.append(max_cell_w + cell_pad * 2)
@@ -2572,35 +2643,53 @@ class ContentRenderer:
             h_text = headers[i] if i < len(headers) else ""
             h_tokens = h_text.split() or [""]
             min_w = max(
-                self.fonts.measure(t, header_font_size, bold=True) for t in h_tokens
+                self.fonts.measure(t, header_font_size, bold=True, fontname=h_font_m)
+                for t in h_tokens
             )
             # Widest single token in body rows
             for row in rows:
                 cell_text, cell_bold = row[i] if i < len(row) else ("", False)
                 tokens = cell_text.split() or [""]
                 token_max = max(
-                    self.fonts.measure(t, body_font_size, bold=cell_bold)
+                    self.fonts.measure(
+                        t, body_font_size, bold=cell_bold,
+                        fontname=b_bold_font_m if cell_bold else b_font_m,
+                    )
                     for t in tokens
                 )
                 min_w = max(min_w, token_max)
             min_widths.append(min_w + cell_pad * 2)
 
-        # Redistribute: bump undersized columns, shrink oversized ones
-        deficit = 0.0
-        flexible_width = 0.0
-        for i in range(num_cols):
-            if col_widths_pt[i] < min_widths[i]:
-                deficit += min_widths[i] - col_widths_pt[i]
-            else:
-                flexible_width += col_widths_pt[i]
-
-        if deficit > 0 and flexible_width > 0:
+        # Redistribute: bump undersized columns, shrink oversized ones.
+        # Herhaal zolang het krimpen een flexibele kolom onder zijn minimum
+        # duwt (anders breekt een woord midden af, bijv. "Verlee|nd"). De
+        # eerste ronde is gelijk aan de oude eenmalige herverdeling.
+        locked = [col_widths_pt[i] < min_widths[i] for i in range(num_cols)]
+        for _ in range(num_cols):
+            deficit = sum(
+                min_widths[i] - col_widths_pt[i]
+                for i in range(num_cols)
+                if locked[i] and col_widths_pt[i] < min_widths[i]
+            )
+            flexible_width = sum(
+                col_widths_pt[i] for i in range(num_cols) if not locked[i]
+            )
+            if deficit <= 0 or flexible_width <= 0:
+                break
             shrink_factor = max((flexible_width - deficit) / flexible_width, 0.5)
             for i in range(num_cols):
-                if col_widths_pt[i] < min_widths[i]:
-                    col_widths_pt[i] = min_widths[i]
+                if locked[i]:
+                    col_widths_pt[i] = max(col_widths_pt[i], min_widths[i])
                 else:
                     col_widths_pt[i] *= shrink_factor
+            newly = [
+                i for i in range(num_cols)
+                if not locked[i] and col_widths_pt[i] < min_widths[i]
+            ]
+            if not newly or shrink_factor == 0.5:
+                break
+            for i in newly:
+                locked[i] = True
 
         h_fontname = header_s.get("font", "Inter-Bold")
         h_fontsize = header_s.get("size", 9)
@@ -2622,7 +2711,9 @@ class ContentRenderer:
         header_wrapped: list[list[str]] = []
         for i, h in enumerate(headers):
             w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
-            lines = self.fonts.wrap_text(str(h), h_fontsize, w - cell_pad * 2, bold=True)
+            lines = self.fonts.wrap_text(
+                str(h), h_fontsize, w - cell_pad * 2, bold=True, fontname=h_fontname
+            )
             header_wrapped.append(lines if lines else [""])
         header_max_lines = max((len(lines) for lines in header_wrapped), default=1)
         header_h = max(header_max_lines * (h_fontsize * 1.35) + 8, 20.0)
@@ -2634,6 +2725,9 @@ class ContentRenderer:
 
         spacing_before = s.get("spacing_before", 20.0)
         b_color_hex = self._color(body_s, "color", "primary", "table.body.text")
+        # Bold body font name (via centrale helper). Valt terug op de
+        # header font wanneer die niet direct afgeleid kan worden.
+        b_bold_fontname = _derive_bold_fontname(b_fontname, fallback_bold=h_fontname)
 
         def wrap_row(row_specs: list[_CellSpec]) -> tuple[list[list], float]:
             """Celregels en rijhoogte. Gewone cellen als (text, is_bold)-regels,
@@ -2649,7 +2743,8 @@ class ContentRenderer:
                     ))
                     continue
                 lines = self.fonts.wrap_text(
-                    spec.text, b_fontsize, w - cell_pad * 2, bold=spec.bold
+                    spec.text, b_fontsize, w - cell_pad * 2, bold=spec.bold,
+                    fontname=b_bold_fontname if spec.bold else b_fontname,
                 )
                 wrapped_lines = lines if lines else [""]
                 row_wrapped.append([(line, spec.bold) for line in wrapped_lines])
@@ -2735,9 +2830,6 @@ class ContentRenderer:
         render_header()
         self.y += header_h
 
-        # Bold body font name (via centrale helper). Valt terug op de
-        # header font wanneer die niet direct afgeleid kan worden.
-        b_bold_fontname = _derive_bold_fontname(b_fontname, fallback_bold=h_fontname)
         group_s = s.get("group", {})
 
         # --- Body rows ---
