@@ -36,6 +36,12 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as rl_canvas
 
+from openaec_reports.core.page_frame import (
+    apply_frame,
+    brand_page_elements,
+    render_static_pages,
+    static_context,
+)
 from openaec_reports.core.rich_text import (
     BoxStyle,
     Break,
@@ -1626,6 +1632,9 @@ class ContentRenderer:
         # waarvan de titels zelf al een nummering bevatten (bijv. BBL-
         # toetsingen met "Afd. 4.3 — ..." als titel).
         self._auto_number_enabled: bool = True
+        # Tokens voor static_elements (achterblad); gezet door _render_content.
+        self.static_context: dict[str, str] = {}
+        self.backcover_added: bool = False
         # Statuslabel rechtsboven op elke inhoudspagina ("CONCEPT"); gezet
         # door ReportGeneratorV2 vanuit data["header_label"]. Leeg = geen.
         self.header_label: str | dict = ""
@@ -1695,7 +1704,10 @@ class ContentRenderer:
 
         margins = self.tpl.standaard.get("margins", {})
         self.y = margins.get("top", 74.9)
-        if self.header_label and template_key == "standaard":
+        if (
+            self.header_label and template_key == "standaard"
+            and self.tpl.standaard.get("header_label", {}).get("draw", True)
+        ):
             self._draw_header_label()
 
         # Y-max instellen op basis van oriëntatie
@@ -1763,15 +1775,38 @@ class ContentRenderer:
         pn = self.tpl.page_number
         if not pn or not self.page:
             return
-        self._text(
-            pn["x"], pn["y_td"],
-            str(self.current_page_nr),
-            pn.get("font", "Inter-Regular"),
-            pn["size"],
-            pn["color"],
-        )
+        # hidden: true = nummer niet tekenen (het paginakader toont het), wel tellen.
+        if not pn.get("hidden", False):
+            self._text(
+                pn["x"], pn["y_td"],
+                str(self.current_page_nr),
+                pn.get("font", "Inter-Regular"),
+                pn["size"],
+                pn["color"],
+            )
         self.current_page_nr += 1
         self._page_number_written = True
+
+    def _text_spaced(
+        self,
+        x: float,
+        baseline: float,
+        text: str,
+        font: fitz.Font,
+        size: float,
+        color: tuple,
+        char_space: float = 0.0,
+    ) -> None:
+        """Tekst op een basislijn, optioneel met letterspatiering (CSS letter-spacing)."""
+        tw = fitz.TextWriter(self.page.rect)
+        if not char_space:
+            tw.append((x, baseline), text, font=font, fontsize=size)
+        else:
+            cx = x
+            for ch in text:
+                tw.append((cx, baseline), ch, font=font, fontsize=size)
+                cx += font.text_length(ch, fontsize=size) + char_space
+        tw.write_text(self.page, color=color)
 
     def _text(
         self,
@@ -2616,6 +2651,10 @@ class ContentRenderer:
         grid_color: tuple,
         render_header: Callable[[], None],
         header_h: float,
+        pad_t: float = 3.0,
+        pad_b: float = 3.0,
+        pad_r: float | None = None,
+        rule_width: float = 0.3,
     ) -> None:
         """Groepsrij: tekst van de eerste gevulde cel over alle kolommen, vet op vlak."""
         spec = next((sp for sp in row_specs if sp.text or sp.runs), _CellSpec("", False))
@@ -2625,8 +2664,9 @@ class ContentRenderer:
             for r in (spec.runs or [{"text": spec.text, "italic": spec.italic}])
         ]
         color = spec.color or self._color(group_s, "color", "primary", "table.group.color")
-        lines = self._layout_runs(runs, fontname, fontsize, color, max_w - cell_pad * 2)
-        row_h = max(len(lines) * cell_line_h + 6, cell_line_h + 6)
+        pad_r = cell_pad if pad_r is None else pad_r
+        lines = self._layout_runs(runs, fontname, fontsize, color, max_w - cell_pad - pad_r)
+        row_h = max(len(lines) * cell_line_h + pad_t + pad_b, cell_line_h + pad_t + pad_b)
         if self._check_overflow(row_h):
             render_header()
             self.y += header_h
@@ -2635,12 +2675,14 @@ class ContentRenderer:
             fitz.Rect(x, self.y, x + max_w, self.y + row_h), color=None, fill=_hex_to_rgb(bg)
         )
         for li, line in enumerate(lines):
-            self._draw_rich_line(line, x + cell_pad, self.y + 3 + li * cell_line_h, fontsize)
+            self._draw_rich_line(
+                line, x + cell_pad, self.y + pad_t + li * cell_line_h, fontsize
+            )
         self.page.draw_line(
             fitz.Point(x, self.y + row_h),
             fitz.Point(x + max_w, self.y + row_h),
             color=grid_color,
-            width=0.3,
+            width=rule_width,
         )
         self.y += row_h
 
@@ -2719,9 +2761,25 @@ class ContentRenderer:
         # --- Resolve column widths ---
         # Meten met de fonts waarmee ook getekend wordt.
         h_font_m = header_s.get("font", "Inter-Bold")
+        # Kop in kapitalen en met letterspatiering: meten zoals getekend wordt.
+        h_char_space = float(header_s.get("char_space", 0.0))
+        if header_s.get("uppercase", False):
+            headers = [h.upper() for h in headers]
+
+        def head_w(text: str, size: float) -> float:
+            return self.fonts.measure(
+                text, size, bold=True, fontname=h_font_m
+            ) + h_char_space * max(len(text) - 1, 0)
+
         b_font_m = body_s.get("font", "Inter-Regular")
         b_bold_font_m = self._table_bold_fontname(b_font_m, h_font_m)
-        cell_pad = 5  # horizontal padding per side
+        # Celpadding (pt); default = oud gedrag (5 links/rechts, 3 boven/onder).
+        pad_cfg = s.get("cell_padding", {})
+        pad_l = float(pad_cfg.get("left", 5.0))
+        pad_r = float(pad_cfg.get("right", 5.0))
+        pad_t = float(pad_cfg.get("top", 3.0))
+        pad_b = float(pad_cfg.get("bottom", 3.0))
+        pad_h = pad_l + pad_r
         if raw_widths and len(raw_widths) >= num_cols:
             total = sum(raw_widths[:num_cols])
             if total > 0:
@@ -2734,9 +2792,7 @@ class ContentRenderer:
             measured = []
             for i in range(num_cols):
                 h_text = headers[i] if i < len(headers) else ""
-                max_cell_w = self.fonts.measure(
-                    h_text, header_font_size, bold=True, fontname=h_font_m
-                )
+                max_cell_w = head_w(h_text, header_font_size)
                 body_font_size = body_s.get("size", 8)
                 for row in rows[:10]:
                     if i < len(row):
@@ -2746,7 +2802,7 @@ class ContentRenderer:
                             fontname=b_bold_font_m if cell_bold else b_font_m,
                         )
                         max_cell_w = max(max_cell_w, cell_w)
-                measured.append(max_cell_w + cell_pad * 2)
+                measured.append(max_cell_w + pad_h)
             total_measured = sum(measured)
             if total_measured > 0:
                 col_widths_pt = [(m / total_measured) * max_w for m in measured]
@@ -2764,8 +2820,7 @@ class ContentRenderer:
             h_text = headers[i] if i < len(headers) else ""
             h_tokens = h_text.split() or [""]
             min_w = max(
-                self.fonts.measure(t, header_font_size, bold=True, fontname=h_font_m)
-                for t in h_tokens
+                head_w(t, header_font_size) for t in h_tokens
             )
             # Widest single token in body rows
             for row in rows:
@@ -2779,7 +2834,7 @@ class ContentRenderer:
                     for t in tokens
                 )
                 min_w = max(min_w, token_max)
-            min_widths.append(min_w + cell_pad * 2)
+            min_widths.append(min_w + pad_h)
 
         # Redistribute: bump undersized columns, shrink oversized ones.
         # Herhaal zolang het krimpen een flexibele kolom onder zijn minimum
@@ -2818,26 +2873,49 @@ class ContentRenderer:
         b_fontname = body_s.get("font", "Inter-Regular")
         b_fontsize = body_s.get("size", 8)
         b_color = _hex_to_rgb(self._color(body_s, "color", "primary", "table.body.text"))
-        bg_color = _hex_to_rgb(
-            self._color(header_s, "background", "text_accent", "table.header.background")
+        # background: none = kop zonder vulling (bijv. kba: kleine kapitalen op een lijn).
+        bg_color = (
+            None if header_s.get("background") == "none" else _hex_to_rgb(
+                self._color(header_s, "background", "text_accent", "table.header.background")
+            )
         )
         stripe_color = _hex_to_rgb(self._color(s, "stripe_color", "surface", "table.stripe"))
         grid_color = _hex_to_rgb(self._color(s, "grid_color", "separator", "table.grid"))
         line_color_hdr = _hex_to_rgb(
             self._color(s, "header_grid_color", "paper", "table.header_grid")
         )
-        cell_line_h = b_fontsize * 1.35  # line height within cells
-
+        cell_line_h = b_fontsize * body_s.get("line_height_factor", 1.35)
+        grid_vertical = s.get("grid_vertical", True)
+        body_rule = s.get("row_rule", {})
+        row_rule_color = (
+            _hex_to_rgb(self._color(body_rule, "color", "separator", "table.row_rule"))
+            if body_rule else grid_color
+        )
+        row_rule_width = float(body_rule.get("width", 0.3))
         # Pre-wrap all header cells
         header_wrapped: list[list[str]] = []
         for i, h in enumerate(headers):
             w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
-            lines = self.fonts.wrap_text(
-                str(h), h_fontsize, w - cell_pad * 2, bold=True, fontname=h_fontname
-            )
+            if h_char_space:
+                # Woordgewijs met letterspatiering; een te lang woord blijft heel
+                # (de minimumbreedte van de kolom houdt er al rekening mee).
+                lines = []
+                for word in str(h).split():
+                    trial = f"{lines[-1]} {word}" if lines else word
+                    if lines and head_w(trial, h_fontsize) <= w - pad_h:
+                        lines[-1] = trial
+                    else:
+                        lines.append(word)
+            else:
+                lines = self.fonts.wrap_text(
+                    str(h), h_fontsize, w - pad_h, bold=True, fontname=h_fontname
+                )
             header_wrapped.append(lines if lines else [""])
         header_max_lines = max((len(lines) for lines in header_wrapped), default=1)
-        header_h = max(header_max_lines * (h_fontsize * 1.35) + 8, 20.0)
+        header_h = max(
+            header_max_lines * (h_fontsize * 1.35) + header_s.get("padding", 8.0),
+            header_s.get("min_height", 20.0),
+        )
         # Zonder "headers"-sleutel geen kopregel; een expliciete lege lijst
         # houdt het oude gedrag (lege kopband) zodat bestaande invoer gelijk blijft.
         has_header = bool(headers_raw) or "headers" in block
@@ -2860,17 +2938,18 @@ class ContentRenderer:
                 if spec.rich:
                     row_wrapped.append(self._layout_runs(
                         spec.as_runs(), b_fontname, b_fontsize,
-                        spec.color or b_color_hex, w - cell_pad * 2,
+                        spec.color or b_color_hex, w - pad_h,
                     ))
                     continue
                 lines = self.fonts.wrap_text(
-                    spec.text, b_fontsize, w - cell_pad * 2, bold=spec.bold,
+                    spec.text, b_fontsize, w - pad_h, bold=spec.bold,
                     fontname=b_bold_fontname if spec.bold else b_fontname,
                 )
                 wrapped_lines = lines if lines else [""]
                 row_wrapped.append([(line, spec.bold) for line in wrapped_lines])
             max_lines = max(len(lines) for lines in row_wrapped)
-            return row_wrapped, max(max_lines * cell_line_h + 6, cell_line_h + 6)
+            pad_v = pad_t + pad_b
+            return row_wrapped, max(max_lines * cell_line_h + pad_v, cell_line_h + pad_v)
 
         def row_height(idx: int) -> float:
             if idx not in group_rows:
@@ -2881,9 +2960,9 @@ class ContentRenderer:
                 for r in (spec.runs or [{"text": spec.text}])
             ]
             lines = self._layout_runs(
-                runs, b_fontname, b_fontsize, b_color_hex, max_w - cell_pad * 2
+                runs, b_fontname, b_fontsize, b_color_hex, max_w - pad_h
             )
-            return max(len(lines) * cell_line_h + 6, cell_line_h + 6)
+            return max(len(lines) * cell_line_h + pad_t + pad_b, cell_line_h + pad_t + pad_b)
 
         # Kop niet los onderaan een pagina: kop + de eerste keep_rows rijen
         # (standaard 2) moeten samen passen, anders begint de tabel op een
@@ -2921,22 +3000,33 @@ class ContentRenderer:
                 )
                 return
             header_rect = fitz.Rect(x, self.y, x + max_w, self.y + header_h)
-            self.page.draw_rect(header_rect, color=None, fill=bg_color)
+            if bg_color is not None:
+                self.page.draw_rect(header_rect, color=None, fill=bg_color)
             cx = x
             for i, lines in enumerate(header_wrapped):
                 w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
-                # Vertically center the wrapped text block
                 text_block_h = len(lines) * (h_fontsize * 1.35)
-                y_start = self.y + (header_h - text_block_h) / 2
+                if header_s.get("valign") == "bottom":
+                    y_start = self.y + header_h - header_s.get("padding_bottom", 4.0) - text_block_h
+                else:
+                    # Vertically center the wrapped text block
+                    y_start = self.y + (header_h - text_block_h) / 2
                 for li, line in enumerate(lines):
                     font_obj = self.fonts.get_fitz_font(h_fontname)
-                    tw = fitz.TextWriter(self.page.rect)
-                    tw.append(
-                        (cx + cell_pad, y_start + h_fontsize * 0.8 + li * (h_fontsize * 1.35)),
-                        line, font=font_obj, fontsize=h_fontsize,
+                    self._text_spaced(
+                        cx + pad_l, y_start + h_fontsize * 0.8 + li * (h_fontsize * 1.35),
+                        line, font_obj, h_fontsize, h_color, h_char_space,
                     )
-                    tw.write_text(self.page, color=h_color)
                 cx += w
+            rule = header_s.get("rule")
+            if rule:
+                self.page.draw_line(
+                    fitz.Point(x, self.y + header_h), fitz.Point(x + max_w, self.y + header_h),
+                    color=_hex_to_rgb(self._color(rule, "color", "primary", "table.header.rule")),
+                    width=float(rule.get("width", 1.0)),
+                )
+            if not grid_vertical:
+                return
             # Vertical grid lines in header
             cx = x
             for i in range(num_cols - 1):
@@ -2957,8 +3047,9 @@ class ContentRenderer:
         for row_idx, row_specs in enumerate(specs):
             if row_idx in group_rows:
                 self._table_group_row(
-                    row_specs, x, max_w, cell_pad, cell_line_h, b_fontname, b_fontsize,
-                    group_s, grid_color, render_header, header_h,
+                    row_specs, x, max_w, pad_l, cell_line_h, b_fontname, b_fontsize,
+                    group_s, row_rule_color, render_header, header_h,
+                    pad_t=pad_t, pad_b=pad_b, pad_r=pad_r, rule_width=row_rule_width,
                 )
                 continue
             row_wrapped, row_h = wrap_row(row_specs)
@@ -2978,14 +3069,14 @@ class ContentRenderer:
             for i, lines in enumerate(row_wrapped):
                 w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
                 spec = row_specs[i] if i < len(row_specs) else _CellSpec("", False)
-                y_text = self.y + 3  # top padding
+                y_text = self.y + pad_t  # top padding
                 if spec.bg_color:
                     self.page.draw_rect(
                         fitz.Rect(cx, self.y, cx + w, self.y + row_h),
                         color=None, fill=_hex_to_rgb(spec.bg_color),
                     )
                 if spec.rich:
-                    inner_w = w - cell_pad * 2
+                    inner_w = w - pad_h
                     for li, line in enumerate(lines):
                         offset = 0.0
                         if spec.align == "center":
@@ -2993,7 +3084,7 @@ class ContentRenderer:
                         elif spec.align == "right":
                             offset = inner_w - line.width
                         self._draw_rich_line(
-                            line, cx + cell_pad + offset, y_text + li * cell_line_h, b_fontsize
+                            line, cx + pad_l + offset, y_text + li * cell_line_h, b_fontsize
                         )
                     cx += w
                     continue
@@ -3002,7 +3093,7 @@ class ContentRenderer:
                     font_obj = self.fonts.get_fitz_font(font_name)
                     tw = fitz.TextWriter(self.page.rect)
                     tw.append(
-                        (cx + cell_pad, y_text + b_fontsize * 0.8 + li * cell_line_h),
+                        (cx + pad_l, y_text + b_fontsize * 0.8 + li * cell_line_h),
                         line, font=font_obj, fontsize=b_fontsize,
                     )
                     tw.write_text(self.page, color=b_color)
@@ -3010,7 +3101,7 @@ class ContentRenderer:
 
             # Vertical grid lines between columns
             cx = x
-            for i in range(num_cols - 1):
+            for i in range(num_cols - 1 if grid_vertical else 0):
                 cx += col_widths_pt[i]
                 self.page.draw_line(
                     fitz.Point(cx, self.y),
@@ -3019,23 +3110,26 @@ class ContentRenderer:
                     width=0.3,
                 )
 
-            # Bottom border
-            self.page.draw_line(
-                fitz.Point(x, self.y + row_h),
-                fitz.Point(x + max_w, self.y + row_h),
-                color=grid_color,
-                width=0.3,
-            )
+            # Bottom border (last_row_rule: false = geen lijn onder de laatste rij)
+            is_last_row = row_idx == len(specs) - 1
+            if not is_last_row or s.get("last_row_rule", True):
+                self.page.draw_line(
+                    fitz.Point(x, self.y + row_h),
+                    fitz.Point(x + max_w, self.y + row_h),
+                    color=row_rule_color,
+                    width=row_rule_width,
+                )
 
             self.y += row_h
 
         # Final bottom border
-        self.page.draw_line(
-            fitz.Point(x, self.y),
-            fitz.Point(x + max_w, self.y),
-            color=grid_color,
-            width=0.5,
-        )
+        if s.get("final_rule", True):
+            self.page.draw_line(
+                fitz.Point(x, self.y),
+                fitz.Point(x + max_w, self.y),
+                color=grid_color,
+                width=0.5,
+            )
 
         self.y += s.get("spacing_after", 20.0)
 
@@ -3802,12 +3896,109 @@ class ContentRenderer:
         self.current_page_nr += 1
 
     def render_achterblad(self) -> None:
-        """Append static backcover PDF."""
+        """Append static backcover PDF, of het achterblad uit static_elements."""
         path = self.stationery.get("achterblad")
         if path and path.exists():
             src = fitz.open(str(path))
             self.doc.insert_pdf(src)
             src.close()
+            self.backcover_added = True
+            return
+        elements = brand_page_elements(self._brand_config, "backcover")
+        if elements:
+            src = render_static_pages(
+                [(elements, self.static_context)], brand_config=self._brand_config,
+                fonts=self.fonts, block="backcover.static_elements",
+            )
+            self.doc.insert_pdf(src)
+            src.close()
+            self.backcover_added = True
+
+    def colofon_as_content(self, data: dict) -> bool:
+        """Colofon als inhoudspagina (brand ``pages.colofon.render: content``)."""
+        if not data.get("colofon", {}).get("enabled", True):
+            return False
+        path = self.stationery.get("colofon")
+        if path and path.exists():
+            return False
+        cfg = (getattr(self._brand_config, "pages", None) or {}).get("colofon", {}) or {}
+        return cfg.get("render") == "content"
+
+    def render_colofon_page(self, data: dict) -> None:
+        """Colofon als inhoudspagina: kicker, titel, gegevens, revisies, eigen blokken.
+
+        Stijl uit brand ``pages.colofon.content_style`` (kicker, title); de
+        gegevens gebruiken definition_list en de revisies de tabelstijl. Eigen
+        rijen via ``colofon.rows``, extra blokken via ``colofon.content``.
+        """
+        col = data.get("colofon", {}) or {}
+        cfg = (getattr(self._brand_config, "pages", None) or {}).get("colofon", {}) or {}
+        style = cfg.get("content_style", {})
+        p = self.blocks.get("paragraph", {})
+        x = style.get("x", p.get("x", 125.4))
+        self._new_page()
+        k = style.get("kicker", {})
+        kicker = str(col.get("kicker", k.get("text", "Colofon")))
+        if k.get("uppercase", True):
+            kicker = kicker.upper()
+        k_size = k.get("size", 7.5)
+        k_font = self.fonts.get_fitz_font(k.get("font", p.get("font", "Inter-Regular")))
+        self._text_spaced(
+            x, self.y + k_size * 0.8, kicker, k_font, k_size,
+            _hex_to_rgb(self._color(k, "color", "secondary", "colofon.kicker")),
+            float(k.get("char_space", 0.0)),
+        )
+        self.y += k_size + k.get("spacing_after", 11.3)
+        t = style.get("title", {})
+        title = str(col.get("title") or " ".join(
+            v for v in (data.get("report_type", ""), data.get("project", "")) if v
+        ))
+        t_size = t.get("size", 24.0)
+        t_font = t.get("font", p.get("font", "Inter-Regular"))
+        max_w = style.get("max_width", p.get("max_width", 393.0))
+        for line in self._title_lines(title, t_font, t_size, max_w):
+            self._text(x, self.y, line, t_font, t_size,
+                       self._color(t, "color", "primary", "colofon.title"))
+            self.y += t_size * 1.2
+        self.y += t.get("spacing_after", 22.7) - t_size * 0.2
+        if col.get("subtitle"):
+            self.paragraph(str(col["subtitle"]))
+
+        rows = col.get("rows")
+        if rows is None:
+            author = ", ".join(
+                v for v in (col.get("adviseur_naam", ""), col.get("adviseur_bedrijf", "")) if v
+            ) or data.get("author", "")
+            candidates = [
+                ("Project", data.get("project", "")),
+                ("Projectnummer", data.get("project_number", "")),
+                ("Opdrachtgever", col.get("opdrachtgever_naam", data.get("client", ""))),
+                ("Opgesteld door", author),
+                ("Fase", col.get("fase", "")),
+                ("Datum", data.get("date", "")),
+                ("Versie", data.get("version", "")),
+                ("Status", col.get("status_colofon", data.get("status", ""))),
+                ("Kenmerk", col.get("kenmerk", "")),
+                ("Normen", col.get("normen", "")),
+            ]
+            rows = [{"label": lbl, "value": val} for lbl, val in candidates if val]
+        if rows:
+            self.definition_list({"rows": rows})
+        history = col.get("revision_history") or []
+        if history:
+            self.table({
+                "title": col.get("revision_title", "Versiebeheer"),
+                "headers": ["Versie", "Datum", "Door", "Wijziging"],
+                "column_widths": [12, 20, 14, 70],
+                "rows": [
+                    [h.get("version", ""), h.get("date", ""), h.get("author", ""),
+                     h.get("description", "")]
+                    for h in history
+                ],
+            })
+        for block in col.get("content", []) or []:
+            self._render_block(block)
+        self._add_page_number()
 
     def save(self, output_path: Path) -> None:
         """Save the assembled PyMuPDF document."""
@@ -4066,6 +4257,19 @@ class ReportGeneratorV2:
             logger.info("Merging PDF...")
             self._merge_pdfs(parts, output_path)
 
+            # 5. Paginakader (brand pages.frame.static_elements), niet op
+            #    cover en achterblad.
+            frame = brand_page_elements(self.brand_config, "frame")
+            if frame:
+                stamped = apply_frame(
+                    output_path, frame, static_context(data, self.brand_config),
+                    skip_first=data.get("cover", {}).get("enabled", True),
+                    skip_last=content.backcover_added,
+                    brand_config=self.brand_config, fonts=self.fonts,
+                    elements_landscape=brand_page_elements(self.brand_config, "frame_landscape"),
+                )
+                logger.info("Paginakader op %d pagina's", stamped)
+
             # Report stats
             result = fitz.open(str(output_path))
             page_count = result.page_count
@@ -4089,6 +4293,10 @@ class ReportGeneratorV2:
         dezelfde pagina liet wijzen).
         """
         renderer.header_label = data.get("header_label") or ""
+        renderer.static_context = static_context(data, self.brand_config)
+        colofon_page = renderer.colofon_as_content(data)
+        if colofon_page:
+            renderer.render_colofon_page(data)
         toc_cfg = data.get("toc", {})
         toc_enabled = toc_cfg.get("enabled", True)
         # Auto-nummering default aan — rapporten met eigen nummering in
@@ -4155,7 +4363,7 @@ class ReportGeneratorV2:
             )
             try:
                 # Voeg TOC pagina(s) in op positie 0 van de content-doc
-                renderer.doc.insert_pdf(toc_doc, start_at=0)
+                renderer.doc.insert_pdf(toc_doc, start_at=1 if colofon_page else 0)
             finally:
                 toc_doc.close()
 

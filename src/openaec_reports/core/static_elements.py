@@ -329,6 +329,45 @@ def render_static_elements(
                     preserveAspectRatio=(fit == "contain"), mask="auto",
                 )
 
+        elif el_type == "text" and el.get("segments"):
+            # Tekstregel uit stukken met eigen font/kleur, achter elkaar gezet
+            # (bijv. "Bedrijfsnaam" semibold petrol + " - 2459 - versie 0.2"
+            # grijs). align: left (default) of right voor de hele regel.
+            from reportlab.pdfbase.pdfmetrics import stringWidth
+
+            x, y = _mm(el.get("x")), _mm(el.get("y"))
+            size = float(el.get("size", 10.0))
+            parts: list[tuple[str, str, float, str]] = []
+            for j, seg in enumerate(el["segments"]):
+                text = str(seg.get("content", "")).format_map(safe_ctx)
+                if not text:
+                    continue
+                seg_size = float(seg.get("size", size))
+                font = seg.get("font", el.get("font", "LiberationSans"))
+                try:
+                    stringWidth("x", font, seg_size)
+                except KeyError:
+                    font = "LiberationSans"
+                color = _resolve_color(
+                    {"color": seg.get("color", el.get("color"))}, "color",
+                    block=f"{el_label}.segments[{j}]",
+                )
+                parts.append((text, font, seg_size, color))
+            if not parts:
+                continue
+            total = sum(stringWidth(t, f, s) for t, f, s, _ in parts)
+            x_pt = x * MM_TO_PT
+            if el.get("align") == "right":
+                x_pt -= total
+            y_bl = page_height_pt - (y * MM_TO_PT) - size * 0.8
+            for text, font, seg_size, color in parts:
+                c.saveState()
+                c.setFillColor(HexColor(color))
+                c.setFont(font, seg_size)
+                c.drawString(x_pt, y_bl, text)
+                c.restoreState()
+                x_pt += stringWidth(text, font, seg_size)
+
         elif el_type == "text":
             x, y = _mm(el.get("x")), _mm(el.get("y"))
             content_raw = str(el.get("content", ""))
