@@ -2449,6 +2449,19 @@ class ContentRenderer:
 
     # --- Table ---
 
+    def _table_bold_fontname(self, body_font: str, header_font: str) -> str:
+        """Vet font voor ``<b>``-cellen.
+
+        ``_derive_bold_fontname`` vindt alleen een vette variant als de naam
+        'Bold' bevat of Inter is; anders geeft hij de headerfont terug, en die
+        is bij kba (SegoeUI) en 3bm (GothamBook) gewoon regular: vet was dan
+        onzichtbaar. Dan de template-rol ``fonts.bold``, anders Liberation Bold.
+        """
+        derived = _derive_bold_fontname(body_font, fallback_bold=header_font)
+        if "bold" in derived.lower():
+            return derived
+        return self._font_role("bold") or "LiberationSans-Bold"
+
     def _cell_spec(
         self, value: object, row: int, col: int, cell_styles: dict,
     ) -> _CellSpec:
@@ -2599,7 +2612,7 @@ class ContentRenderer:
         # Meten met de fonts waarmee ook getekend wordt.
         h_font_m = header_s.get("font", "Inter-Bold")
         b_font_m = body_s.get("font", "Inter-Regular")
-        b_bold_font_m = _derive_bold_fontname(b_font_m, fallback_bold=h_font_m)
+        b_bold_font_m = self._table_bold_fontname(b_font_m, h_font_m)
         cell_pad = 5  # horizontal padding per side
         if raw_widths and len(raw_widths) >= num_cols:
             total = sum(raw_widths[:num_cols])
@@ -2727,7 +2740,7 @@ class ContentRenderer:
         b_color_hex = self._color(body_s, "color", "primary", "table.body.text")
         # Bold body font name (via centrale helper). Valt terug op de
         # header font wanneer die niet direct afgeleid kan worden.
-        b_bold_fontname = _derive_bold_fontname(b_fontname, fallback_bold=h_fontname)
+        b_bold_fontname = self._table_bold_fontname(b_fontname, h_fontname)
 
         def wrap_row(row_specs: list[_CellSpec]) -> tuple[list[list], float]:
             """Celregels en rijhoogte. Gewone cellen als (text, is_bold)-regels,

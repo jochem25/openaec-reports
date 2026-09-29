@@ -441,3 +441,22 @@ class TestFontByName:
     def test_measure_uses_named_font(self, fm):
         text = "Bouwveiligheidsplan"
         assert fm.measure(text, 10, fontname="TestfontBook") > fm.measure(text, 10)
+
+
+class TestTableBoldFont:
+    """Legacy <b>-cellen: vette font ook als de body-font geen 'Bold'-variant heeft."""
+
+    def bold(self, body, header, role):
+        fake = SimpleNamespace(_font_role=lambda name: role if name == "bold" else None)
+        return ContentRenderer._table_bold_fontname(fake, body, header)
+
+    def test_template_bold_role(self):
+        assert self.bold("SegoeUI", "SegoeUI", "SegoeUI-Bold") == "SegoeUI-Bold"
+        assert self.bold("GothamBook", "GothamBook", "GothamBold") == "GothamBold"
+
+    def test_derived_bold_unchanged(self):
+        assert self.bold("Inter-Regular", "Inter-Bold", "X") == "Inter-Bold"
+        assert self.bold("Foo", "Foo-Bold", None) == "Foo-Bold"
+
+    def test_no_role_falls_back_to_liberation_bold(self):
+        assert self.bold("SegoeUI", "SegoeUI", None) == "LiberationSans-Bold"
