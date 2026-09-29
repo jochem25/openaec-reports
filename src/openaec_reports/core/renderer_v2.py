@@ -2595,22 +2595,36 @@ class ContentRenderer:
                 min_w = max(min_w, token_max)
             min_widths.append(min_w + cell_pad * 2)
 
-        # Redistribute: bump undersized columns, shrink oversized ones
-        deficit = 0.0
-        flexible_width = 0.0
-        for i in range(num_cols):
-            if col_widths_pt[i] < min_widths[i]:
-                deficit += min_widths[i] - col_widths_pt[i]
-            else:
-                flexible_width += col_widths_pt[i]
-
-        if deficit > 0 and flexible_width > 0:
+        # Redistribute: bump undersized columns, shrink oversized ones.
+        # Herhaal zolang het krimpen een flexibele kolom onder zijn minimum
+        # duwt (anders breekt een woord midden af, bijv. "Verlee|nd"). De
+        # eerste ronde is gelijk aan de oude eenmalige herverdeling.
+        locked = [col_widths_pt[i] < min_widths[i] for i in range(num_cols)]
+        for _ in range(num_cols):
+            deficit = sum(
+                min_widths[i] - col_widths_pt[i]
+                for i in range(num_cols)
+                if locked[i] and col_widths_pt[i] < min_widths[i]
+            )
+            flexible_width = sum(
+                col_widths_pt[i] for i in range(num_cols) if not locked[i]
+            )
+            if deficit <= 0 or flexible_width <= 0:
+                break
             shrink_factor = max((flexible_width - deficit) / flexible_width, 0.5)
             for i in range(num_cols):
-                if col_widths_pt[i] < min_widths[i]:
-                    col_widths_pt[i] = min_widths[i]
+                if locked[i]:
+                    col_widths_pt[i] = max(col_widths_pt[i], min_widths[i])
                 else:
                     col_widths_pt[i] *= shrink_factor
+            newly = [
+                i for i in range(num_cols)
+                if not locked[i] and col_widths_pt[i] < min_widths[i]
+            ]
+            if not newly or shrink_factor == 0.5:
+                break
+            for i in newly:
+                locked[i] = True
 
         h_fontname = header_s.get("font", "Inter-Bold")
         h_fontsize = header_s.get("size", 9)
