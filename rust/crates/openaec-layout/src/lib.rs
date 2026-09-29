@@ -53,7 +53,7 @@ pub use draw::{DrawOp, DrawList};
 pub use flowable::{Flowable, LayoutContext, SplitResult};
 pub use spacer::{Spacer, PageBreak};
 pub use paragraph::{Paragraph, ParagraphStyle};
-pub use table::{Table, TableStyleConfig, CellContent};
+pub use table::{Table, TableStyleConfig, CellContent, RowOverride};
 pub use image_flowable::{ImageFlowable, ImageData};
 pub use frame::{Frame, FrameResult};
 pub use page_template::{PageTemplate, PageCallback};

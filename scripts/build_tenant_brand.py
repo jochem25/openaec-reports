@@ -118,6 +118,23 @@ def build_colors(kleuren: dict[str, str]) -> dict[str, str]:
     }
 
 
+def build_status(source_data: dict[str, Any]) -> dict[str, str]:
+    """Statuskleuren (kba-brand.json 'status': tokennamen uit 'kleuren') als hex.
+
+    Sleutels met '_' zijn commentaar. Een onbekende tokennaam is een fout:
+    liever luid falen dan een stille verkeerde kleur.
+    """
+    kleuren = source_data["kleuren"]
+    result: dict[str, str] = {}
+    for key, token in (source_data.get("status") or {}).items():
+        if key.startswith("_"):
+            continue
+        if token not in kleuren:
+            raise ValueError(f"status.{key} verwijst naar onbekende kleur '{token}'")
+        result[key] = kleuren[token]
+    return result
+
+
 def build_fonts(_typografie: dict[str, Any]) -> dict[str, str]:
     """Map naar ReportLab-fontnamen die matchen met tenants/<tenant>/fonts/*.ttf.
 
@@ -182,6 +199,9 @@ def build_brand_yaml(
         "colors": build_colors(kleuren),
         "fonts": build_fonts(typografie),
     }
+    status = build_status(source_data)
+    if status:
+        result["status"] = status
     if "logos" in base:
         result["logos"] = base["logos"]
     result["contact"] = build_contact(bedrijf)

@@ -76,6 +76,20 @@
         "max_depth": { "type": "integer", "minimum": 1, "maximum": 3, "default": 3 }
       }
     },
+    "header_label": {
+      "description": "Statuslabel rechtsboven op elke inhoudspagina (renderer_v2), bijv. 'CONCEPT' of 'MOCKUP - NIET INDIENEN'. Weggelaten = geen label",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["text"],
+          "properties": {
+            "text": { "type": "string" },
+            "kind": { "type": "string", "enum": ["ntb", "bron", "ok", "nvt", "fout"], "default": "fout" }
+          }
+        }
+      ]
+    },
     "sections": {
       "type": "array",
       "description": "Rapport secties in volgorde",
@@ -159,7 +173,28 @@
         },
         "disclaimer": {
           "type": "string",
-          "description": "Disclaimer tekst. Default uit template."
+          "description": "Disclaimer tekst. Default uit template. Bij colofon als inhoudspagina: blok onderaan."
+        },
+        "kicker": { "type": "string", "description": "Colofon als inhoudspagina: kleine kop boven de titel (default 'Colofon')" },
+        "title": { "type": "string", "description": "Colofon als inhoudspagina: titel (default report_type + project)" },
+        "subtitle": { "type": "string", "description": "Colofon als inhoudspagina: ondertitel (default documentgegevens)" },
+        "rows": {
+          "type": "array",
+          "description": "Colofon als inhoudspagina: eigen gegevensrijen (vervangt de standaardrijen)",
+          "items": {
+            "type": "object",
+            "required": ["label"],
+            "properties": {
+              "label": { "type": "string" },
+              "value": { "type": ["string", "number", "null"] },
+              "runs": { "$ref": "#/$defs/rich_runs" }
+            }
+          }
+        },
+        "content": {
+          "type": "array",
+          "description": "Colofon als inhoudspagina: extra blokken na versiebeheer",
+          "items": { "$ref": "#/$defs/content_block" }
         }
       }
     },
@@ -190,10 +225,23 @@
           "default": "portrait",
           "description": "Oriëntatie voor deze specifieke sectie. Overschrijft document orientation."
         },
+        "part": {
+          "type": "string",
+          "description": "Deelkop boven de hoofdstuktitel en als groepsregel in de inhoudsopgave (level 1), bijv. 'DEEL B - RISICO'S'"
+        },
+        "reference": {
+          "type": "string",
+          "description": "Verwijzing rechts uitgelijnd en grijs in de kop en de inhoudsopgave (level 1 en 2), bijv. 'Bbl 7.4 - 7.5a-c'"
+        },
         "page_break_before": {
           "type": "boolean",
           "default": false,
-          "description": "Forceer nieuwe pagina voor deze sectie"
+          "description": "Forceer nieuwe pagina voor deze sectie (level 1 begint altijd op een nieuwe pagina, tenzij continue_on_page)"
+        },
+        "continue_on_page": {
+          "type": "boolean",
+          "default": false,
+          "description": "Alleen level 1 (renderer_v2): true = hoofdstuk loopt door op de huidige inhoudspagina in plaats van een nieuwe pagina te beginnen"
         }
       }
     },
@@ -213,6 +261,8 @@
         { "$ref": "#/$defs/block_spacer" },
         { "$ref": "#/$defs/block_page_break" },
         { "$ref": "#/$defs/block_bullet_list" },
+        { "$ref": "#/$defs/block_checklist" },
+        { "$ref": "#/$defs/block_definition_list" },
         { "$ref": "#/$defs/block_heading_2" },
         { "$ref": "#/$defs/block_raw_flowable" },
         { "$ref": "#/$defs/block_bic_table" },
@@ -224,12 +274,17 @@
 
     "block_paragraph": {
       "type": "object",
-      "required": ["type", "text"],
+      "required": ["type"],
+      "anyOf": [{ "required": ["text"] }, { "required": ["runs"] }],
       "properties": {
         "type": { "const": "paragraph" },
         "text": {
           "type": "string",
           "description": "Tekst. Ondersteunt basis ReportLab XML markup: <b>, <i>, <sub>, <sup>"
+        },
+        "runs": {
+          "$ref": "#/$defs/rich_runs",
+          "description": "Opgemaakte tekst als runs; wint van text als beide aanwezig zijn"
         },
         "style": {
           "type": "string",
@@ -274,22 +329,49 @@
 
     "block_table": {
       "type": "object",
-      "required": ["type", "headers", "rows"],
+      "required": ["type", "rows"],
       "properties": {
         "type": { "const": "table" },
         "title": { "type": "string", "description": "Tabeltitel (optioneel)" },
         "headers": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Kolomnamen"
+          "description": "Kolomnamen (optioneel; zonder headers geen kopregel)"
         },
         "rows": {
           "type": "array",
           "items": {
             "type": "array",
-            "items": {}
+            "items": { "$ref": "#/$defs/table_cell" }
           },
           "description": "Data rijen (2D array)"
+        },
+        "keep_rows": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2,
+          "description": "Aantal eerste rijen dat met titel en kop op dezelfde pagina moet (renderer_v2)"
+        },
+        "row_styles": {
+          "type": "array",
+          "description": "Rijstijlen per data-rij (0-geindexeerd)",
+          "items": {
+            "type": "object",
+            "required": ["row", "style"],
+            "properties": {
+              "row": { "type": "integer", "minimum": 0 },
+              "style": {
+                "type": "string",
+                "enum": ["group"],
+                "description": "group = groepsrij: eerste gevulde cel over alle kolommen, vet, lichte achtergrond"
+              }
+            }
+          }
+        },
+        "cell_styles": {
+          "type": "object",
+          "description": "Per-cel opmaak, sleutel 'rij,kolom' (0-geindexeerd t.o.v. data-rijen)",
+          "additionalProperties": { "$ref": "#/$defs/table_cell_style" }
         },
         "column_widths": {
           "type": "array",
@@ -479,8 +561,55 @@
         "type": { "const": "bullet_list" },
         "items": {
           "type": "array",
-          "items": { "type": "string" },
-          "description": "Lijst van opsommingspunten"
+          "items": { "$ref": "#/$defs/rich_text_item" },
+          "description": "Lijst van opsommingspunten: string, of object met text of runs"
+        }
+      }
+    },
+
+    "block_definition_list": {
+      "type": "object",
+      "required": ["type", "rows"],
+      "description": "Label-waarde-lijst zonder rasterlijnen (label grijs, waarde inkt)",
+      "properties": {
+        "type": { "const": "definition_list" },
+        "label_width_mm": { "type": "number", "minimum": 5, "default": 45 },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label"],
+            "properties": {
+              "label": { "type": "string" },
+              "value": { "type": ["string", "number", "null"] },
+              "runs": { "$ref": "#/$defs/rich_runs" }
+            }
+          }
+        }
+      }
+    },
+
+    "block_checklist": {
+      "type": "object",
+      "required": ["type", "items"],
+      "description": "Aankruislijst met vakjes",
+      "properties": {
+        "type": { "const": "checklist" },
+        "columns": { "type": "integer", "enum": [1, 2], "default": 1 },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "anyOf": [{ "required": ["text"] }, { "required": ["runs"] }],
+            "properties": {
+              "text": { "type": "string" },
+              "runs": { "$ref": "#/$defs/rich_runs" },
+              "checked": {
+                "type": ["boolean", "null"],
+                "description": "true = aangevinkt, false = leeg vak, null = leeg vak met label n.t.b."
+              }
+            }
+          }
         }
       }
     },
@@ -637,6 +766,89 @@
           "description": "Objectfoto"
         }
       }
+    },
+
+    "rich_label": {
+      "type": "object",
+      "description": "Label (chip) in lopende tekst, bijv. n.t.b. of een bronverwijzing",
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["ntb", "bron", "ok", "nvt", "fout", "bekend"],
+          "default": "ntb",
+          "description": "ntb (omlijnd, grijs), bron (gevuld, klein), ok, nvt, fout (rood), bekend (gevuld mint); kleuren uit brand.status als die er is"
+        }
+      }
+    },
+
+    "rich_run": {
+      "type": "object",
+      "description": "Stuk opgemaakte tekst, een label of een aankruisvak",
+      "anyOf": [{ "required": ["text"] }, { "required": ["label"] }, { "required": ["check"] }],
+      "properties": {
+        "text": { "type": "string", "description": "Tekst; \\n geeft een harde regelafbreking" },
+        "bold": { "type": "boolean", "default": false },
+        "italic": { "type": "boolean", "default": false },
+        "color": {
+          "type": "string",
+          "description": "Semantische merkkleur (bijv. text_light, warning; aliassen grijs, rood, inkt, accent), statustoken (bijv. score_4, status.ok) of #RRGGBB"
+        },
+        "label": { "$ref": "#/$defs/rich_label" },
+        "check": {
+          "type": ["boolean", "null"],
+          "description": "Aankruisvak: true = vinkje, false = leeg vak, null = leeg vak met label n.t.b."
+        }
+      }
+    },
+
+    "rich_runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/rich_run" }
+    },
+
+    "table_cell_style": {
+      "type": "object",
+      "properties": {
+        "bold": { "type": "boolean" },
+        "italic": { "type": "boolean" },
+        "color": { "type": "string", "description": "Tekstkleur: merkkleur, alias of #RRGGBB" },
+        "text_color": { "type": "string", "description": "Alias van color (zoals spreadsheet)" },
+        "bg_color": { "type": "string", "description": "Achtergrond: merkkleur, alias of #RRGGBB" },
+        "align": { "type": "string", "enum": ["left", "center", "right"] }
+      }
+    },
+
+    "table_cell": {
+      "description": "Celwaarde, of object met text of runs plus opmaak",
+      "oneOf": [
+        { "type": ["string", "number", "boolean", "null"] },
+        {
+          "type": "object",
+          "allOf": [{ "$ref": "#/$defs/table_cell_style" }],
+          "properties": {
+            "text": { "type": ["string", "number"] },
+            "runs": { "$ref": "#/$defs/rich_runs" }
+          }
+        }
+      ]
+    },
+
+    "rich_text_item": {
+      "description": "Tekst als string, of object met text of runs (runs wint)",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "anyOf": [{ "required": ["text"] }, { "required": ["runs"] }],
+          "properties": {
+            "text": { "type": "string" },
+            "runs": { "$ref": "#/$defs/rich_runs" }
+          }
+        }
+      ]
     },
 
     "image_source": {

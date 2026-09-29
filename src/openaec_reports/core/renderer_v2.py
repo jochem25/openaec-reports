@@ -23,6 +23,8 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -33,6 +35,30 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as rl_canvas
+
+from openaec_reports.core.page_frame import (
+    apply_frame,
+    brand_page_elements,
+    date_style,
+    format_date,
+    render_static_pages,
+    static_context,
+)
+from openaec_reports.core.rich_text import (
+    BoxStyle,
+    Break,
+    LabelStyle,
+    Line,
+    Piece,
+    Space,
+    TextStyle,
+    box_piece,
+    label_piece,
+    layout_pieces,
+    plain_text,
+    runs_of,
+    text_pieces,
+)
 
 if TYPE_CHECKING:
     from openaec_reports.core.tenant import TenantConfig  # noqa: F401
@@ -200,6 +226,29 @@ def _parse_cell(value: object) -> tuple[str, bool]:
     return _strip_html(text), is_bold
 
 
+_PT_PER_MM = 72 / 25.4
+
+
+@dataclass
+class _CellSpec:
+    """Genormaliseerde tabelcel. ``rich=False`` = oud pad (tekst + hele-cel-vet)."""
+
+    text: str
+    bold: bool
+    italic: bool = False
+    color: str | None = None
+    bg_color: str | None = None
+    align: str = "left"
+    runs: list[dict] | None = None
+    rich: bool = False
+
+    def as_runs(self) -> list[dict]:
+        """Runs voor de regelopbouw; zonder eigen runs een run met de celopmaak."""
+        if self.runs:
+            return self.runs
+        return [{"text": self.text, "bold": self.bold, "italic": self.italic}]
+
+
 # ---------------------------------------------------------------------------
 # Template Loader
 # ---------------------------------------------------------------------------
@@ -354,6 +403,7 @@ class FontManager:
 
         self._rl_registered = False
         self._fitz_fonts: dict[str, fitz.Font] = {}
+        self._missing_fonts: set[str] = set()
         self._uses_custom_fonts = True
 
         # Laad Liberation Sans als embedded fallback (altijd)
@@ -505,20 +555,115 @@ class FontManager:
                 if path is not None:
                     page.insert_font(fontname=name, fontfile=str(path))
 
+    def _find_font_by_name(self, fontname: str) -> fitz.Font | None:
+        """Laad een font uit de cascade op naam, zoals ``register_reportlab`` registreert.
+
+        Match op bestandsstam (``Gotham-Book``) of op de stam zonder ``-``,
+        ``_`` en spaties (``GothamBook``), hoofdletterongevoelig; .ttf gaat
+        voor .otf. Resultaat wordt gecachet onder ``fontname``.
+        """
+        key = fontname.replace("-", "").replace("_", "").replace(" ", "").lower()
+        if not key:
+            return None
+        for suffix in (".ttf", ".otf"):
+            for base in self._font_cascade:
+                if not base.exists():
+                    continue
+                for path in sorted(base.glob(f"*{suffix}")):
+                    stem = path.stem
+                    stripped = stem.replace("-", "").replace("_", "").replace(" ", "").lower()
+                    if stem.lower() == fontname.lower() or stripped == key:
+                        try:
+                            font = fitz.Font(fontfile=str(path))
+                        except (RuntimeError, ValueError) as e:  # pragma: no cover
+                            logger.warning("Font %s niet te laden: %s", path, e)
+                            return None
+                        self._fitz_fonts[fontname] = font
+                        return font
+        return None
+
     def get_fitz_font(self, fontname: str) -> fitz.Font:
-        """Return fitz.Font object for given fontname string."""
+        """Return fitz.Font object for given fontname string.
+
+        Volgorde: geladen fonts, dan een font-bestand met die naam in de
+        tenant-cascade (bijv. ``SegoeUI`` -> ``SegoeUI.ttf``), dan de
+        fallback (Inter of Liberation; vet als de naam 'bold' bevat).
+        """
         if fontname in self._fitz_fonts:
             return self._fitz_fonts[fontname]
+        if fontname in self._missing_fonts:
+            found = None
+        else:
+            found = self._find_font_by_name(fontname)
+            if found is None:
+                self._missing_fonts.add(fontname)
+        if found is not None:
+            return found
         is_bold = "bold" in fontname.lower() or "Bold" in fontname
         return self._bold_font if is_bold else self._book_font
 
-    def measure(self, text: str, fontsize: float, bold: bool = False) -> float:
-        """Measure text width using font metrics."""
-        font = self._bold_font if bold else self._book_font
+    def get_variant(
+        self,
+        base_fontname: str,
+        *,
+        bold: bool = False,
+        italic: bool = False,
+        bold_fontname: str | None = None,
+        italic_fontname: str | None = None,
+    ) -> fitz.Font:
+        """Font voor opgemaakte runs: vet, cursief of beide.
+
+        Zonder opmaak is dit ``get_fitz_font(base_fontname)``, zodat runs
+        hetzelfde font krijgen als gewone tekst. Voor vet en cursief eerst
+        de template-namen (``fonts.bold`` / ``fonts.book_italic``), anders
+        de Liberation-variant. Vet-cursief valt terug op Liberation
+        BoldItalic, of vet als dat bestand ontbreekt.
+        """
+        if bold and italic:
+            cached = self._fitz_fonts.get("LiberationSans-BoldItalic")
+            if cached is not None:
+                return cached
+            path = self._find_font_path("LiberationSans-BoldItalic.ttf")
+            if path is None:
+                return self._bold_font
+            font = fitz.Font(fontfile=str(path))
+            self._fitz_fonts["LiberationSans-BoldItalic"] = font
+            return font
+        if bold:
+            if bold_fontname:
+                return self.get_fitz_font(bold_fontname)
+            return self._bold_font
+        if italic:
+            if italic_fontname:
+                found = self._fitz_fonts.get(italic_fontname) or self._find_font_by_name(
+                    italic_fontname
+                )
+                if found is not None:
+                    return found
+            return self._liberation_italic
+        return self.get_fitz_font(base_fontname)
+
+    def measure(
+        self, text: str, fontsize: float, bold: bool = False, fontname: str | None = None,
+    ) -> float:
+        """Measure text width using font metrics.
+
+        Met ``fontname`` wordt gemeten met het font waarmee ook getekend
+        wordt (``get_fitz_font``); zonder valt het terug op book/bold.
+        """
+        if fontname:
+            font = self.get_fitz_font(fontname)
+        else:
+            font = self._bold_font if bold else self._book_font
         return font.text_length(text, fontsize=fontsize)
 
     def wrap_text(
-        self, text: str, fontsize: float, max_width: float, bold: bool = False
+        self,
+        text: str,
+        fontsize: float,
+        max_width: float,
+        bold: bool = False,
+        fontname: str | None = None,
     ) -> list[str]:
         """Word-wrap text to fit within max_width.
 
@@ -537,7 +682,7 @@ class FontManager:
 
         for token in tokens:
             test = f"{current} {token}".strip()
-            if self.measure(test, fontsize, bold) <= max_width:
+            if self.measure(test, fontsize, bold, fontname) <= max_width:
                 current = test
                 continue
 
@@ -547,7 +692,7 @@ class FontManager:
                 current = ""
 
             # Check if single token fits on a fresh line
-            if self.measure(token, fontsize, bold) <= max_width:
+            if self.measure(token, fontsize, bold, fontname) <= max_width:
                 current = token
                 continue
 
@@ -557,17 +702,20 @@ class FontManager:
                 if not sp:
                     continue
                 test = f"{current}{sp}" if current else sp
-                if self.measure(test, fontsize, bold) <= max_width:
+                if self.measure(test, fontsize, bold, fontname) <= max_width:
                     current = test
                 else:
                     if current:
                         lines.append(current)
                     # If sub-part itself is too wide, break by character
-                    if self.measure(sp, fontsize, bold) > max_width:
+                    if self.measure(sp, fontsize, bold, fontname) > max_width:
                         current = ""
                         for ch in sp:
                             test_ch = current + ch
-                            if self.measure(test_ch, fontsize, bold) > max_width and current:
+                            if (
+                                self.measure(test_ch, fontsize, bold, fontname) > max_width
+                                and current
+                            ):
                                 lines.append(current)
                                 current = ch
                             else:
@@ -585,6 +733,18 @@ class FontManager:
 # ---------------------------------------------------------------------------
 
 
+def _is_svg(path: Path) -> bool:
+    """SVG op extensie, of op inhoud als de extensie ontbreekt of niet klopt."""
+    if path.suffix.lower() == ".svg":
+        return True
+    try:
+        with open(path, "rb") as f:
+            head = f.read(512).lstrip()
+    except OSError:
+        return False
+    return head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in head)
+
+
 def _resolve_image(src) -> Path | None:
     """Resolve image source: file path, base64 dict, or None."""
     if not src:
@@ -594,7 +754,10 @@ def _resolve_image(src) -> Path | None:
         # Base64 encoded image
         data = src.get("data", "")
         media_type = src.get("media_type", "image/png")
-        ext = ".png" if "png" in media_type else ".jpg"
+        if "svg" in media_type:
+            ext = ".svg"
+        else:
+            ext = ".png" if "png" in media_type else ".jpg"
         try:
             raw = base64.b64decode(data)
             tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
@@ -893,7 +1056,7 @@ class CoverGenerator:
             "kicker": data.get("kicker", ""),
             "project": data.get("project", ""),
             "project_number": data.get("project_number", ""),
-            "date": data.get("date", ""),
+            "date": format_date(data.get("date", ""), date_style(self._brand_config)),
             "version": data.get("version", ""),
             "status": data.get("status", ""),
             "client": colofon_data.get("opdrachtgever_naam", data.get("client", "")),
@@ -1145,7 +1308,7 @@ class ColofonGenerator:
             logical_lines: list[str] = []
             for raw_line in text.split("\n"):
                 wrapped = self.fonts.wrap_text(
-                    raw_line, value_size, value_max_w, bold=value_bold
+                    raw_line, value_size, value_max_w, bold=value_bold, fontname=value_font
                 )
                 logical_lines.extend(wrapped if wrapped else [""])
             for i, line in enumerate(logical_lines):
@@ -1331,7 +1494,7 @@ class ColofonGenerator:
         max_w = max(50.0, page_w - x - right_margin)
         bold = "Bold" in font_name
         font_obj = self.fonts.get_fitz_font(font_name)
-        lines = self.fonts.wrap_text(value, size, max_w, bold=bold)
+        lines = self.fonts.wrap_text(value, size, max_w, bold=bold, fontname=font_name)
         for i, line in enumerate(lines):
             tw = fitz.TextWriter(page.rect)
             tw.append(
@@ -1471,6 +1634,25 @@ class ContentRenderer:
         # waarvan de titels zelf al een nummering bevatten (bijv. BBL-
         # toetsingen met "Afd. 4.3 — ..." als titel).
         self._auto_number_enabled: bool = True
+        # Tokens voor static_elements (achterblad); gezet door _render_content.
+        self.static_context: dict[str, str] = {}
+        self.backcover_added: bool = False
+        # Paginaindexen (in self.doc) van bijlage-scheidingsbladen: geen kader.
+        self.divider_pages: list[int] = []
+        # Bijlage-scheidingsbladen voor de bladwijzers: (label, titel, pagina_nr).
+        self.divider_log: list[tuple[str, str, int]] = []
+        # Aantal voor de inhoudsopgave gereserveerde pagina's en het werkelijk
+        # gebruikte aantal (ReportGeneratorV2 rendert opnieuw bij verschil, F13).
+        self.toc_reserve: int = 1
+        self.toc_pages_used: int = 0
+        # Statuslabel rechtsboven op elke inhoudspagina ("CONCEPT"); gezet
+        # door ReportGeneratorV2 vanuit data["header_label"]. Leeg = geen.
+        self.header_label: str | dict = ""
+        # Stationery-sleutel van de huidige pagina ("standaard", "bijlagen").
+        self._page_template: str = ""
+        # Keep-with-next: ruimte die het volgende blok minimaal nodig heeft;
+        # een kop of een alinea voor een tabel verhuist anders mee (F3).
+        self._keep_next: float = 0.0
         self._section_counter: int = 0
         self._subsection_counter: int = 0
 
@@ -1524,6 +1706,7 @@ class ContentRenderer:
 
         self.page_count += 1
         self.page = self.doc[-1]
+        self._page_template = template_key
         self.page.clean_contents()  # Normaliseer content stream voor TextWriter
         self.fonts.insert_into_page(self.page)
         # Reset idempotency-flag: nieuwe pagina krijgt een nieuw nummer.
@@ -1531,12 +1714,44 @@ class ContentRenderer:
 
         margins = self.tpl.standaard.get("margins", {})
         self.y = margins.get("top", 74.9)
+        if (
+            self.header_label and template_key == "standaard"
+            and self.tpl.standaard.get("header_label", {}).get("draw", True)
+        ):
+            self._draw_header_label()
 
         # Y-max instellen op basis van oriëntatie
         if self._orientation == "landscape":
             self.y_max = self._default_y_max_landscape
         else:
             self.y_max = self._default_y_max_portrait
+
+    def _draw_header_label(self) -> None:
+        """Statuslabel (chip) rechtsboven in de kop van een inhoudspagina.
+
+        Positie en soort via ``standaard.yaml`` ``header_label`` (``right_x``,
+        ``y_td``, ``kind``, ``size``); standaard rechts uitgelijnd op de
+        tekstkolom, halverwege de bovenmarge, als fout-label (rood omlijnd).
+        """
+        value = self.header_label
+        text = str(value.get("text", "")) if isinstance(value, dict) else str(value)
+        if not text:
+            return
+        cfg = self.tpl.standaard.get("header_label", {})
+        kind = (value.get("kind") if isinstance(value, dict) else None) or cfg.get("kind", "fout")
+        base = cfg.get("base_size", 11.0)
+        style = self._label_style(kind, base)
+        piece = label_piece(self._label_text(kind, text), style)
+        line = layout_pieces([piece], piece.width + 1.0)[0]
+        p = self.blocks.get("paragraph", {})
+        if self._orientation == "landscape":
+            margin = self.blocks.get("table", {}).get("right_margin_landscape", 54.0)
+            right = cfg.get("right_x_landscape", A4_LANDSCAPE_WIDTH - margin)
+        else:
+            right = cfg.get("right_x", p.get("x", 125.4) + p.get("max_width", 393.0))
+        top = self.tpl.standaard.get("margins", {}).get("top", 74.9)
+        y_td = cfg.get("y_td", top / 2 - base * 0.47)
+        self._draw_rich_line(line, right - line.width, y_td, base)
 
     def _check_overflow(self, needed: float) -> bool:
         """Check if content fits; if not, finalize page and start new one."""
@@ -1545,6 +1760,17 @@ class ContentRenderer:
             self._new_page()
             return True
         return False
+
+    def _display_page_nr(self) -> int:
+        """Paginanummer van de huidige pagina.
+
+        ``_add_page_number`` hoogt de teller op zodra het nummer gestempeld
+        is; loopt de inhoud daarna op dezelfde pagina door (een sectie zonder
+        paginabreuk), dan is het nummer van deze pagina de teller min een.
+        """
+        if self._page_number_written:
+            return self.current_page_nr - 1
+        return self.current_page_nr
 
     def _add_page_number(self) -> None:
         """Add page number to current page (idempotent per page).
@@ -1559,15 +1785,38 @@ class ContentRenderer:
         pn = self.tpl.page_number
         if not pn or not self.page:
             return
-        self._text(
-            pn["x"], pn["y_td"],
-            str(self.current_page_nr),
-            pn.get("font", "Inter-Regular"),
-            pn["size"],
-            pn["color"],
-        )
+        # hidden: true = nummer niet tekenen (het paginakader toont het), wel tellen.
+        if not pn.get("hidden", False):
+            self._text(
+                pn["x"], pn["y_td"],
+                str(self.current_page_nr),
+                pn.get("font", "Inter-Regular"),
+                pn["size"],
+                pn["color"],
+            )
         self.current_page_nr += 1
         self._page_number_written = True
+
+    def _text_spaced(
+        self,
+        x: float,
+        baseline: float,
+        text: str,
+        font: fitz.Font,
+        size: float,
+        color: tuple,
+        char_space: float = 0.0,
+    ) -> None:
+        """Tekst op een basislijn, optioneel met letterspatiering (CSS letter-spacing)."""
+        tw = fitz.TextWriter(self.page.rect)
+        if not char_space:
+            tw.append((x, baseline), text, font=font, fontsize=size)
+        else:
+            cx = x
+            for ch in text:
+                tw.append((cx, baseline), ch, font=font, fontsize=size)
+                cx += font.text_length(ch, fontsize=size) + char_space
+        tw.write_text(self.page, color=color)
 
     def _text(
         self,
@@ -1617,7 +1866,37 @@ class ContentRenderer:
         lv1_color = self._color(lv1, "color", "text_accent", "toc.level1")
         lv2_color = self._color(lv2, "color", "primary", "toc.level2")
 
-        for level, number, title, pg in entries:
+        part_cfg = toc_cfg.get("part", {})
+        current_part = ""
+        for entry in entries:
+            level, number, title, pg = entry[:4]
+            part = entry[4] if len(entry) > 4 else ""
+            reference = entry[5] if len(entry) > 5 else ""
+            if level == 1 and part and part != current_part:
+                # Deelkop als groepsregel boven de hoofdstukken van dat deel.
+                self.y += part_cfg.get("spacing_before", 17.0)
+                self._check_overflow(20)
+                self._text(
+                    part_cfg.get("x", lv1.get("number_x", 90.0)), self.y, part,
+                    part_cfg.get("font", lv1.get("font", "Inter-Regular")),
+                    part_cfg.get("size", 9.0),
+                    self._color(part_cfg, "color", "text_light", "toc.part"),
+                )
+                self.y += part_cfg.get("spacing_after", 0.0)
+            if level == 1:
+                current_part = part or current_part
+            if reference:
+                lv = lv1 if level == 1 else lv2
+                ref_cfg = toc_cfg.get("reference", {})
+                ref_size = ref_cfg.get("size", round(lv.get("size", 9.5) * 0.8, 2))
+                pending_reference = (
+                    ref_cfg.get("right_x", lv.get("page_x", 515.4) - ref_cfg.get("gap", 12.0)),
+                    (lv.get("size", 9.5) - ref_size) * 0.8, reference,
+                    ref_cfg.get("font", lv.get("font", "Inter-Regular")), ref_size,
+                    self._color(ref_cfg, "color", "text_light", "toc.reference"),
+                )
+            else:
+                pending_reference = None
             if level == 1:
                 self.y += lv1.get("spacing_before", 17.0)
                 self._check_overflow(20)
@@ -1629,23 +1908,23 @@ class ContentRenderer:
                     lv1.get("size", 12.0),
                     lv1_color,
                 )
-                self._text(
-                    lv1.get("title_x", 160.9),
-                    self.y,
-                    title,
-                    lv1.get("font", "Inter-Regular"),
-                    lv1.get("size", 12.0),
-                    lv1_color,
+                extra = self._toc_title(
+                    lv1, title, lv1_color, 12.0, pending_reference, str(pg)
                 )
                 self._text(
                     lv1.get("page_x", 515.4),
-                    self.y,
+                    self.y + extra,
                     str(pg),
                     lv1.get("font", "Inter-Regular"),
                     lv1.get("size", 12.0),
                     lv1_color,
                 )
-                self.y += lv1.get("spacing_after", 20.0)
+                if pending_reference:
+                    self._text_right(
+                        pending_reference[0], self.y + extra + pending_reference[1],
+                        *pending_reference[2:],
+                    )
+                self.y += lv1.get("spacing_after", 20.0) + extra
             else:
                 self._check_overflow(17.3)
                 self._text(
@@ -1656,25 +1935,65 @@ class ContentRenderer:
                     lv2.get("size", 9.5),
                     lv2_color,
                 )
-                self._text(
-                    lv2.get("title_x", 160.9),
-                    self.y,
-                    title,
-                    lv2.get("font", "Inter-Regular"),
-                    lv2.get("size", 9.5),
-                    lv2_color,
+                extra = self._toc_title(
+                    lv2, title, lv2_color, 9.5, pending_reference, str(pg)
                 )
                 self._text(
                     lv2.get("page_x", 515.4),
-                    self.y,
+                    self.y + extra,
                     str(pg),
                     lv2.get("font", "Inter-Regular"),
                     lv2.get("size", 9.5),
                     lv2_color,
                 )
-                self.y += lv2.get("spacing_after", 17.3)
+                if pending_reference:
+                    self._text_right(
+                        pending_reference[0], self.y + extra + pending_reference[1],
+                        *pending_reference[2:],
+                    )
+                self.y += lv2.get("spacing_after", 17.3) + extra
 
         self._add_page_number()
+
+    def _title_lines(self, title: str, fontname: str, size: float, max_w: float) -> list[str]:
+        """Titel als regels binnen ``max_w``; past hij, dan ongewijzigd een regel."""
+        font = self.fonts.get_fitz_font(fontname)
+        if max_w <= 0 or font.text_length(title, fontsize=size) <= max_w:
+            return [title]
+        lines = layout_pieces(text_pieces(title, TextStyle(font, size, "#000000")), max_w)
+        return [" ".join(p.text for _, p in line.pieces) for line in lines]
+
+    def _toc_title(
+        self,
+        lv: dict,
+        title: str,
+        color: str,
+        default_size: float,
+        pending_reference: tuple | None,
+        page_label: str,
+    ) -> float:
+        """TOC-titel, afgebroken voor de verwijzing of het paginanummer.
+
+        Returns:
+            Extra hoogte (regels na de eerste); paginanummer en verwijzing
+            komen op de laatste regel.
+        """
+        fontname = lv.get("font", "Inter-Regular")
+        size = lv.get("size", default_size)
+        title_x = lv.get("title_x", 160.9)
+        gap = lv.get("title_gap", 10.0)
+        if pending_reference:
+            ref_right, _, ref_text, ref_font, ref_size, _ = pending_reference
+            limit = ref_right - self.fonts.get_fitz_font(ref_font).text_length(
+                ref_text, fontsize=ref_size
+            )
+        else:
+            limit = lv.get("page_x", 515.4)
+        lines = self._title_lines(title, fontname, size, limit - gap - title_x)
+        line_h = lv.get("title_line_height", size * 1.25)
+        for i, line in enumerate(lines):
+            self._text(title_x, self.y + i * line_h, line, fontname, size, color)
+        return (len(lines) - 1) * line_h
 
     def render_toc_to_fresh_doc(
         self,
@@ -1733,39 +2052,437 @@ class ContentRenderer:
 
     # --- Content blocks ---
 
-    def heading_1(self, number: str, title: str) -> None:
+    def _heading_title_x(self, style: dict, number: str) -> float:
+        """X van de koptitel, opgeschoven als het nummer breder is dan de template aanneemt.
+
+        De template-x van de titel gaat uit van een nummer met enkelcijferige delen
+        ("4", "4.1"). Is het nummer breder ("12", "12.10"), dan schuift de titel
+        precies het verschil op, zodat nummer en titel niet in elkaar lopen. Met
+        ``number_gap`` (pt) in de template geldt in plaats daarvan
+        ``max(titel-x, nummer-x + breedte(nummer) + number_gap)``.
+        """
+        n = style.get("number", {})
+        t = style.get("title", {})
+        if not number:
+            return t["x"]
+        font = self.fonts.get_fitz_font(n["font"])
+        width = font.text_length(number, fontsize=n["size"])
+        gap = style.get("number_gap")
+        if gap is not None:
+            return max(t["x"], n["x"] + width + float(gap))
+        reference = re.sub(r"\d+", "0", number)
+        extra = width - font.text_length(reference, fontsize=n["size"])
+        return t["x"] + max(0.0, extra)
+
+    def heading_1(
+        self, number: str, title: str, part: str = "", reference: str = "",
+    ) -> None:
         s = self.blocks.get("heading_1", {})
         n = s.get("number", {})
         t = s.get("title", {})
-        self._check_overflow(n.get("size", 18) + s.get("spacing_after", 33.9))
+        part_s = s.get("part", {})
+        part_h = (part_s.get("size", 9.0) + part_s.get("spacing_after", 8.0)) if part else 0.0
+        title_x = self._heading_title_x(s, number)
+        title_lines = self._title_lines(
+            title, t["font"], t["size"],
+            self._heading_title_limit(s, "heading_1", reference) - title_x,
+        )
+        line_h = t.get("line_height", t["size"] * 1.2)
+        extra = (len(title_lines) - 1) * line_h
+        self._check_overflow(part_h + n.get("size", 18) + s.get("spacing_after", 33.9) + extra)
         # Log AFTER overflow check: current_page_nr reflects the actual
         # page waarop de heading getekend wordt.
-        self.heading_log.append((1, number, title, self.current_page_nr))
+        self.heading_log.append(
+            (1, number, title, self._display_page_nr(), part or "", reference or "")
+        )
+        if part:
+            self._text(
+                part_s.get("x", n["x"]), self.y, part,
+                part_s.get("font", t["font"]), part_s.get("size", 9.0),
+                self._color(part_s, "color", "text_light", "heading_1.part"),
+            )
+            self.y += part_h
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
-        self._text(t["x"], self.y, title, t["font"], t["size"], t["color"])
-        self.y += n["size"] + s.get("spacing_after", 33.9)
+        for i, line in enumerate(title_lines):
+            self._text(title_x, self.y + i * line_h, line, t["font"], t["size"], t["color"])
+        if reference:
+            self._heading_reference(s, "heading_1", reference, self.y, t["size"])
+        self.y += n["size"] + s.get("spacing_after", 33.9) + extra
 
-    def heading_2(self, number: str, title: str) -> None:
+    def _heading_title_limit(self, style: dict, block: str, reference: str) -> float:
+        """Rechtergrens van de koptitel: voor de verwijzing, anders de tekstkolom."""
+        ref_s = style.get("reference", {})
+        p = self.blocks.get("paragraph", {})
+        right = ref_s.get("right_x", p.get("x", 125.4) + p.get("max_width", 393.0))
+        if not reference:
+            # Zonder verwijzing de paginabreedte min marge: bestaande koppen die
+            # tot voorbij de tekstkolom lopen, blijven zo op een regel.
+            page_w = self.page.rect.width if self.page else A4_PORTRAIT_WIDTH
+            return style.get("title_right_x", page_w - 36.0)
+        font = self.fonts.get_fitz_font(
+            ref_s.get("font", style.get("title", {}).get("font", "Inter-Regular"))
+        )
+        width = font.text_length(reference, fontsize=ref_s.get("size", 9.0))
+        return right - width - ref_s.get("gap", 12.0)
+
+    def _heading_reference(
+        self, style: dict, block: str, reference: str, y_td: float, title_size: float,
+    ) -> None:
+        """Verwijzing rechts in de kop, grijs, op de basislijn van de titel."""
+        ref_s = style.get("reference", {})
+        size = ref_s.get("size", 9.0)
+        p = self.blocks.get("paragraph", {})
+        right = ref_s.get("right_x", p.get("x", 125.4) + p.get("max_width", 393.0))
+        baseline_td = y_td + title_size * 0.8 - size * 0.8
+        self._text_right(
+            right, baseline_td, reference,
+            ref_s.get("font", style.get("title", {}).get("font", "Inter-Regular")), size,
+            self._color(ref_s, "color", "text_light", f"{block}.reference"),
+        )
+
+    def _text_right(
+        self, x_right: float, y_td: float, text: str, fontname: str, size: float, color: str,
+    ) -> None:
+        """Tekst rechts uitgelijnd op ``x_right``."""
+        width = self.fonts.get_fitz_font(fontname).text_length(text, fontsize=size)
+        self._text(x_right - width, y_td, text, fontname, size, color)
+
+    def heading_2(self, number: str, title: str, reference: str = "") -> None:
         s = self.blocks.get("heading_2", {})
         n = s.get("number", {})
         t = s.get("title", {})
         spacing_before = s.get("spacing_before", 30.0)
-        self._check_overflow(spacing_before + t.get("size", 13) + s.get("spacing_after", 20.5))
+        title_x = self._heading_title_x(s, number)
+        title_lines = self._title_lines(
+            title, t["font"], t["size"],
+            self._heading_title_limit(s, "heading_2", reference) - title_x,
+        )
+        line_h = t.get("line_height", t["size"] * 1.2)
+        extra = (len(title_lines) - 1) * line_h
+        self._check_overflow(
+            spacing_before + t.get("size", 13) + s.get("spacing_after", 20.5) + extra
+            + self._keep_next
+        )
         # Log AFTER overflow check zodat het juiste paginanummer wordt
         # vastgelegd (ook als overflow een _new_page heeft getriggerd).
-        self.heading_log.append((2, number, title, self.current_page_nr))
+        self.heading_log.append((2, number, title, self._display_page_nr(), "", reference or ""))
         self.y += spacing_before
         self._text(n["x"], self.y, number, n["font"], n["size"], n["color"])
         y_title = self.y - (t["size"] - n["size"]) * 0.3
-        self._text(t["x"], y_title, title, t["font"], t["size"], t["color"])
-        self.y += t["size"] + s.get("spacing_after", 20.5)
+        for i, line in enumerate(title_lines):
+            self._text(
+                title_x, y_title + i * line_h, line, t["font"], t["size"], t["color"]
+            )
+        if reference:
+            self._heading_reference(s, "heading_2", reference, y_title, t["size"])
+        self.y += t["size"] + s.get("spacing_after", 20.5) + extra
+
+    # --- Opgemaakte tekst (runs) ---
+
+    # Labelsoort -> (semantische randkleur, tekstkleur, vulkleur); None = geen.
+    _LABEL_SEMANTICS: dict[str, tuple[str | None, str, str | None]] = {
+        "ntb": ("text_light", "text_light", None),
+        "bron": (None, "paper", "secondary"),
+        "ok": ("secondary", "primary", None),
+        "nvt": ("separator", "text_light", "surface"),
+        "fout": ("warning", "warning", None),
+        "bekend": (None, "primary", "accent"),
+    }
+    # Welke labelrollen een statuskleur (brand.status.<soort>) overnemen.
+    _LABEL_STATUS_ROLES: dict[str, tuple[str, ...]] = {
+        "ntb": ("border", "text"),
+        "bron": ("fill",),
+        "ok": ("border",),
+        "fout": ("border", "text"),
+        "bekend": ("fill",),
+    }
+    # Nederlandse kleurnamen in runs -> semantische merkkleur.
+    _COLOR_ALIASES: dict[str, str] = {
+        "grijs": "text_light",
+        "rood": "warning",
+        "inkt": "text",
+        "accent": "text_accent",
+    }
+
+    def _run_color(self, value: object, default: str) -> str:
+        """Kleur van een run: #RRGGBB, merkkleur (``text_light``) of alias (``grijs``)."""
+        if not value:
+            return default
+        name = str(value).strip()
+        if re.fullmatch(r"#[0-9A-Fa-f]{6}", name):
+            return name
+        name = name.removeprefix("$colors.")
+        name = self._COLOR_ALIASES.get(name, name)
+        colors = getattr(self._brand_config, "colors", None) or {}
+        if name in colors:
+            return colors[name]
+        status = getattr(self._brand_config, "status", None) or {}
+        status_name = name.removeprefix("status.")
+        if status_name in status:
+            return status[status_name]
+        logger.warning("Onbekende runkleur '%s'; basiskleur gebruikt", value)
+        return default
+
+    def _label_style(self, kind: str, base_size: float) -> LabelStyle:
+        """Labelopmaak uit ``blocks.label`` met semantische merkkleuren als basis."""
+        cfg = self.blocks.get("label", {})
+        if kind not in self._LABEL_SEMANTICS:
+            logger.warning("Onbekende labelsoort '%s'; 'ntb' gebruikt", kind)
+            kind = "ntb"
+        kind_cfg = {**cfg.get("kinds", {}).get(kind, {})}
+        status_color = (getattr(self._brand_config, "status", None) or {}).get(kind)
+        if status_color:
+            # Statuskleur van de huisstijl; expliciete template-waarden gaan voor.
+            for role in self._LABEL_STATUS_ROLES.get(kind, ()):
+                kind_cfg.setdefault(role, status_color)
+        border_sem, text_sem, fill_sem = self._LABEL_SEMANTICS[kind]
+        block = f"label.{kind}"
+        border = (
+            self._color(kind_cfg, "border", border_sem, f"{block}.border")
+            if border_sem or kind_cfg.get("border") else None
+        )
+        fill = (
+            self._color(kind_cfg, "fill", fill_sem, f"{block}.fill")
+            if fill_sem or kind_cfg.get("fill") else None
+        )
+        text_color = self._color(kind_cfg, "text", text_sem, f"{block}.text")
+        compact = kind == "bron"
+        default_size = round(base_size * (0.65 if compact else 0.68), 2)
+        size = kind_cfg.get("size", cfg.get("size", default_size))
+        font_name = kind_cfg.get("font", cfg.get("font"))
+        font = (
+            self.fonts.get_fitz_font(font_name) if font_name
+            else self.fonts.get_variant("", bold=True, bold_fontname=self._font_role("bold"))
+        )
+        return LabelStyle(
+            font=font,
+            size=float(size),
+            text_color=text_color,
+            border_color=border,
+            fill_color=fill,
+            pad_x=float(kind_cfg.get("pad_x", cfg.get("pad_x", 2.8 if compact else 3.7))),
+            pad_y=float(kind_cfg.get("pad_y", cfg.get("pad_y", 0.4 if compact else 0.85))),
+            radius=float(kind_cfg.get("radius", cfg.get("radius", 1.7))),
+            line_width=float(kind_cfg.get("line_width", cfg.get("line_width", 0.7))),
+        )
+
+    def _label_text(self, kind: str, text: str) -> str:
+        """Chips in hoofdletters (zoals de BVP-opmaak), bronlabels niet; instelbaar."""
+        cfg = self.blocks.get("label", {})
+        kind_cfg = cfg.get("kinds", {}).get(kind, {})
+        upper = kind_cfg.get("uppercase", cfg.get("uppercase", kind != "bron"))
+        return text.upper() if upper else text
+
+    def _font_role(self, role: str) -> str | None:
+        """Fontnaam uit ``content_styles.fonts`` (``bold``, ``book_italic``)."""
+        return (self.tpl.content_styles.get("fonts") or {}).get(role)
+
+    def _rich_items(
+        self, runs: list[dict], fontname: str, size: float, color: str,
+    ) -> list[Piece | Space | Break]:
+        """Zet runs om in meetbare stukken voor ``layout_pieces``."""
+        items: list[Piece | Space | Break] = []
+        styles: dict[tuple, TextStyle] = {}
+        for run in runs:
+            if not isinstance(run, dict):
+                run = {"text": str(run)}
+            if "check" in run and not run.get("text") and not run.get("label"):
+                # Aankruisvak (F6): true = vinkje, false = leeg, null = leeg + n.t.b.
+                state = run["check"]
+                items.append(box_piece(bool(state), self._box_style(size)))
+                if state is None:
+                    unknown = self.blocks.get("checklist", {}).get("unknown_label", "n.t.b.")
+                    items.append(Space(size * 0.3))
+                    ntb_text = self._label_text("ntb", unknown)
+                    items.append(label_piece(ntb_text, self._label_style("ntb", size)))
+                continue
+            label = run.get("label")
+            if label:
+                if not isinstance(label, dict):
+                    label = {"text": str(label)}
+                kind = str(label.get("kind", "ntb"))
+                text = self._label_text(kind, str(label.get("text", "")))
+                items.append(label_piece(text, self._label_style(kind, size)))
+                continue
+            bold = bool(run.get("bold"))
+            italic = bool(run.get("italic"))
+            run_color = self._run_color(run.get("color"), color)
+            key = (bold, italic, run_color)
+            style = styles.get(key)
+            if style is None:
+                font = self.fonts.get_variant(
+                    fontname, bold=bold, italic=italic,
+                    bold_fontname=self._font_role("bold"),
+                    italic_fontname=self._font_role("book_italic"),
+                )
+                style = styles[key] = TextStyle(font, size, run_color)
+            items.extend(text_pieces(str(run.get("text", "")), style))
+        return items
+
+    def _box_style(self, base_size: float) -> BoxStyle:
+        """Aankruisvak in runs: zelfde kleuren en lijndikte als het checklist-blok."""
+        cs = self.blocks.get("checklist", {})
+        return BoxStyle(
+            size=float(cs.get("box_size", 9.0)) * base_size / 9.5,
+            line_width=float(cs.get("box_line_width", 0.85)),
+            color=self._color(cs, "box_color", "primary", "checklist.box_color"),
+            check_color=self._color(cs, "check_color", "primary", "checklist.check_color"),
+        )
+
+    def _layout_runs(
+        self, runs: list[dict], fontname: str, size: float, color: str, max_width: float,
+    ) -> list[Line]:
+        return layout_pieces(self._rich_items(runs, fontname, size, color), max_width)
+
+    def _draw_rich_line(self, line: Line, x: float, y_td: float, base_size: float) -> None:
+        """Teken een opgemaakte regel; alle stukken delen de basislijn van de basistekst."""
+        if not self.page:
+            return
+        baseline = y_td + base_size * 0.8
+        for px, piece in line.pieces:
+            if piece.box is not None:
+                box = piece.box
+                center = baseline - base_size * 0.33
+                rect = fitz.Rect(
+                    x + px, center - box.size / 2, x + px + box.size, center + box.size / 2
+                )
+                self.page.draw_rect(
+                    rect, color=_hex_to_rgb(box.color), fill=(1, 1, 1),
+                    width=box.line_width, radius=0.12,
+                )
+                if piece.checked:
+                    self.page.draw_polyline(
+                        [
+                            fitz.Point(rect.x0 + box.size * 0.22, rect.y0 + box.size * 0.52),
+                            fitz.Point(rect.x0 + box.size * 0.42, rect.y0 + box.size * 0.72),
+                            fitz.Point(rect.x0 + box.size * 0.78, rect.y0 + box.size * 0.28),
+                        ],
+                        color=_hex_to_rgb(box.check_color), width=box.line_width * 1.4,
+                        lineCap=1, lineJoin=1,
+                    )
+                continue
+            if piece.label is not None:
+                lab = piece.label
+                box_h = lab.size * 1.2 + 2 * lab.pad_y
+                center = baseline - base_size * 0.33
+                rect = fitz.Rect(
+                    x + px, center - box_h / 2, x + px + piece.width, center + box_h / 2
+                )
+                self.page.draw_rect(
+                    rect,
+                    color=_hex_to_rgb(lab.border_color) if lab.border_color else None,
+                    fill=_hex_to_rgb(lab.fill_color) if lab.fill_color else None,
+                    width=lab.line_width if lab.border_color else 0,
+                    radius=min(0.5, lab.radius / max(box_h, 0.1)),
+                )
+                tw = fitz.TextWriter(self.page.rect)
+                tw.append(
+                    (x + px + lab.pad_x, center + lab.size * 0.35),
+                    piece.text, font=lab.font, fontsize=lab.size,
+                )
+                tw.write_text(self.page, color=_hex_to_rgb(lab.text_color))
+                continue
+            st = piece.style
+            tw = fitz.TextWriter(self.page.rect)
+            tw.append((x + px, baseline), piece.text, font=st.font, fontsize=st.size)
+            tw.write_text(self.page, color=_hex_to_rgb(st.color))
+
+    def _keep_estimate(self, block: dict | None, rest: list[dict]) -> float:
+        """Minimale ruimte die ``nxt`` direct na ``block`` nodig heeft (F3).
+
+        - Kop (heading_2, of paragraph met Heading-stijl): twee regels van
+          wat volgt (``blocks.heading_2.keep_with_next``, standaard 2 regels
+          lopende tekst), of het begin van een tabel. Volgt er een alinea
+          die zelf aan een tabel vastzit, dan die alinea plus dat begin.
+        - Alinea of checklist voor een tabel: het begin van de tabel (titel,
+          kop, eerste rijen), ook als er nog tot 3 alinea's/checklists tussen
+          staan (keten, F3b), zodat de inleiding niet los staat.
+        Overige gevallen: 0 (ongewijzigd gedrag).
+        """
+        nxt = rest[0] if rest else None
+        if not block or not nxt:
+            return 0.0
+        btype = block.get("type")
+        is_heading = btype == "heading_2" or (
+            btype == "paragraph" and block.get("style") in ("Heading1", "heading_1",
+                                                           "Heading2", "heading_2")
+        )
+        # Keten (F3b): tot 3 opeenvolgende alinea's/checklists die op een tabel
+        # uitkomen, blijven met het begin van die tabel bij dit blok.
+        chain_h, k = 0.0, 0
+        while (
+            k < len(rest) and k < 3
+            and rest[k].get("type") in ("paragraph", "checklist")
+            and not rest[k].get("style")
+        ):
+            chain_h += self._block_height_estimate(rest[k])
+            k += 1
+        if (
+            k < len(rest) and rest[k].get("type") == "table"
+            and (is_heading or btype in ("paragraph", "checklist"))
+        ):
+            return chain_h + self._table_keep_estimate(rest[k])
+        if is_heading:
+            h2 = self.blocks.get("heading_2", {})
+            p = self.blocks.get("paragraph", {})
+            return float(h2.get("keep_with_next", 2 * p.get("line_height", 12.0)))
+        return 0.0
+
+    def _block_height_estimate(self, block: dict) -> float:
+        """Hoogte van een alinea (tekst of runs); anders twee regels."""
+        p = self.blocks.get("paragraph", {})
+        lh = p.get("line_height", 12.0)
+        if block.get("type") == "paragraph" and "font" in p:
+            runs = runs_of(block)
+            if runs:
+                n = len(self._layout_runs(runs, p["font"], p["size"], p["color"], p["max_width"]))
+            else:
+                n = len(self.fonts.wrap_text(
+                    _strip_html(block.get("text", "")), p["size"], p["max_width"],
+                    fontname=p["font"],
+                ))
+            return p.get("spacing_before", 12.0) + n * lh + p.get("spacing_after", 12.0)
+        if block.get("type") == "checklist":
+            cs = self.blocks.get("checklist", {})
+            rows = -(-len(block.get("items", [])) // (2 if block.get("columns") == 2 else 1))
+            item_lh = cs.get("line_height", lh) + cs.get("row_spacing", 4.0)
+            return (
+                cs.get("spacing_before", p.get("spacing_before", 12.0)) + rows * item_lh
+                + cs.get("spacing_after", p.get("spacing_after", 12.0))
+            )
+        return 2 * lh
+
+    def _table_keep_estimate(self, block: dict) -> float:
+        """Grove hoogte van tabeltitel + kop + eerste keep_rows rijen (enkelregelig)."""
+        s = self.blocks.get("table", {})
+        header_s, body_s = s.get("header", {}), s.get("body", {})
+        keep_rows = int(block.get("keep_rows", s.get("keep_rows", 2)))
+        rows = min(keep_rows, len(block.get("rows", [])))
+        header_h = max(header_s.get("size", 9) * 1.35 + 8, 20.0) if block.get("headers") else 0.0
+        row_h = body_s.get("size", 8) * 1.35 + 6
+        title_h = 16.0 if block.get("title") else 0.0
+        return s.get("spacing_before", 20.0) + title_h + header_h + rows * row_h
+
+    def rich_paragraph(self, runs: list[dict]) -> None:
+        """Paragraph met runs (vet, cursief, kleur, labels)."""
+        s = self.blocks.get("paragraph", {})
+        spacing_before = s.get("spacing_before", 12.0)
+        lines = self._layout_runs(runs, s["font"], s["size"], s["color"], s["max_width"])
+        keep = self._keep_next + s.get("spacing_after", 12.0) if self._keep_next else 0.0
+        self._check_overflow(spacing_before + len(lines) * s["line_height"] + keep)
+        self.y += spacing_before
+        for line in lines:
+            self._draw_rich_line(line, s["x"], self.y, s["size"])
+            self.y += s["line_height"]
+        self.y += s.get("spacing_after", 12.0)
 
     def paragraph(self, text: str) -> None:
         s = self.blocks.get("paragraph", {})
         spacing_before = s.get("spacing_before", 12.0)
         text = _strip_html(text)
-        lines = self.fonts.wrap_text(text, s["size"], s["max_width"])
-        self._check_overflow(spacing_before + len(lines) * s["line_height"])
+        lines = self.fonts.wrap_text(text, s["size"], s["max_width"], fontname=s["font"])
+        keep = self._keep_next + s.get("spacing_after", 12.0) if self._keep_next else 0.0
+        self._check_overflow(spacing_before + len(lines) * s["line_height"] + keep)
         self.y += spacing_before
         for line in lines:
             self._text(s["x"], self.y, line, s["font"], s["size"], s["color"])
@@ -1777,8 +2494,18 @@ class ContentRenderer:
         marker = sb.get("marker", {})
         text_s = sb.get("text", {})
         for item in items:
-            item = _strip_html(item)
-            lines = self.fonts.wrap_text(item, text_s["size"], text_s["max_width"])
+            runs = runs_of(item)
+            if runs is None and isinstance(item, dict):
+                item = str(item.get("text", ""))
+            if runs is not None:
+                lines = self._layout_runs(
+                    runs, text_s["font"], text_s["size"], text_s["color"], text_s["max_width"]
+                )
+            else:
+                item = _strip_html(item)
+                lines = self.fonts.wrap_text(
+                    item, text_s["size"], text_s["max_width"], fontname=text_s["font"]
+                )
             needed = len(lines) * text_s["line_height"] + sb.get("spacing_between", 10.1)
             self._check_overflow(needed)
             # Bullet marker
@@ -1790,13 +2517,223 @@ class ContentRenderer:
                 marker["color"],
             )
             for line in lines:
-                self._text(
-                    text_s["x"], self.y, line, text_s["font"], text_s["size"], text_s["color"]
-                )
+                if runs is not None:
+                    self._draw_rich_line(line, text_s["x"], self.y, text_s["size"])
+                else:
+                    self._text(
+                        text_s["x"], self.y, line, text_s["font"], text_s["size"], text_s["color"]
+                    )
                 self.y += text_s["line_height"]
             self.y += sb.get("spacing_between", 10.1)
 
+    # --- Definitielijst ---
+
+    def definition_list(self, block: dict) -> None:
+        """Label-waarde-lijst zonder rasterlijnen: label grijs, waarde in inktkleur.
+
+        ``rows: [{label, value | runs}]``; ``label_width_mm`` zet de breedte
+        van de labelkolom. Labels en waarden lopen binnen hun kolom terug.
+        """
+        p = self.blocks.get("paragraph", {})
+        ds = self.blocks.get("definition_list", {})
+        x = ds.get("x", p["x"])
+        max_w = ds.get("max_width", p["max_width"])
+        fontname = ds.get("font", p["font"])
+        size = ds.get("size", p["size"])
+        line_h = ds.get("line_height", p["line_height"])
+        label_color = self._color(ds, "label_color", "text_light", "definition_list.label")
+        value_color = self._color(ds, "value_color", "text", "definition_list.value")
+        label_w = float(block.get("label_width_mm", ds.get("label_width_mm", 45.0))) * _PT_PER_MM
+        gap = ds.get("gap", 8.0)
+        row_spacing = ds.get("row_spacing", 3.0)
+        value_w = max(max_w - label_w - gap, 20.0)
+
+        self.y += ds.get("spacing_before", p.get("spacing_before", 12.0))
+        for row in block.get("rows", []):
+            if not isinstance(row, dict):
+                continue
+            label_lines = self._layout_runs(
+                [{"text": str(row.get("label", ""))}], fontname, size, label_color, label_w
+            )
+            value = row.get("value")
+            value_runs = runs_of(row) or [{"text": "" if value is None else str(value)}]
+            value_lines = self._layout_runs(value_runs, fontname, size, value_color, value_w)
+            row_h = max(len(label_lines), len(value_lines)) * line_h
+            self._check_overflow(row_h)
+            for li, line in enumerate(label_lines):
+                self._draw_rich_line(line, x, self.y + li * line_h, size)
+            for li, line in enumerate(value_lines):
+                self._draw_rich_line(line, x + label_w + gap, self.y + li * line_h, size)
+            self.y += row_h + row_spacing
+        self.y += ds.get("spacing_after", p.get("spacing_after", 12.0)) - row_spacing
+
+    # --- Checklist ---
+
+    def checklist(self, block: dict) -> None:
+        """Aankruislijst: vak (aangevinkt, leeg, of leeg + n.t.b.) met tekst of runs.
+
+        ``checked: true`` = vinkje, ``false`` = leeg vak, ``null``/ontbrekend =
+        leeg vak met een ntb-label achter de tekst. Bij ``columns: 2`` worden
+        de items rijsgewijs verdeeld (links, rechts, links, ...).
+        """
+        p = self.blocks.get("paragraph", {})
+        cs = self.blocks.get("checklist", {})
+        x = cs.get("x", p["x"])
+        max_w = cs.get("max_width", p["max_width"])
+        fontname = cs.get("font", p["font"])
+        size = cs.get("size", p["size"])
+        color = cs.get("color", p["color"])
+        line_h = cs.get("line_height", p["line_height"])
+        box = cs.get("box_size", 9.0)
+        box_line = cs.get("box_line_width", 0.85)
+        box_color = self._color(cs, "box_color", "primary", "checklist.box_color")
+        check_color = self._color(cs, "check_color", "primary", "checklist.check_color")
+        text_gap = cs.get("text_gap", 6.0)
+        col_gap = cs.get("column_gap", 14.0)
+        row_spacing = cs.get("row_spacing", 4.0)
+        unknown = cs.get("unknown_label", "n.t.b.")
+
+        columns = 2 if block.get("columns") == 2 else 1
+        col_w = (max_w - col_gap * (columns - 1)) / columns
+        text_w = col_w - box - text_gap
+
+        laid_out: list[tuple[object, list[Line]]] = []
+        for item in block.get("items", []):
+            if not isinstance(item, dict):
+                item = {"text": str(item)}
+            runs = list(runs_of(item) or [{"text": str(item.get("text", ""))}])
+            checked = item.get("checked")
+            if checked is None:
+                runs += [{"text": " "}, {"label": {"text": unknown, "kind": "ntb"}}]
+            laid_out.append((checked, self._layout_runs(runs, fontname, size, color, text_w)))
+
+        self.y += cs.get("spacing_before", p.get("spacing_before", 12.0))
+        for start in range(0, len(laid_out), columns):
+            row = laid_out[start:start + columns]
+            row_h = max(len(lines) for _, lines in row) * line_h
+            is_last = start + columns >= len(laid_out)
+            keep = 0.0
+            if is_last and self._keep_next:
+                keep = self._keep_next + cs.get("spacing_after", p.get("spacing_after", 12.0))
+            self._check_overflow(row_h + keep)
+            for col, (checked, lines) in enumerate(row):
+                cx = x + col * (col_w + col_gap)
+                center = self.y + size * 0.8 - size * 0.33
+                rect = fitz.Rect(cx, center - box / 2, cx + box, center + box / 2)
+                self.page.draw_rect(
+                    rect, color=_hex_to_rgb(box_color), fill=(1, 1, 1),
+                    width=box_line, radius=0.12,
+                )
+                if checked:
+                    self.page.draw_polyline(
+                        [
+                            fitz.Point(rect.x0 + box * 0.22, rect.y0 + box * 0.52),
+                            fitz.Point(rect.x0 + box * 0.42, rect.y0 + box * 0.72),
+                            fitz.Point(rect.x0 + box * 0.78, rect.y0 + box * 0.28),
+                        ],
+                        color=_hex_to_rgb(check_color), width=box_line * 1.4,
+                        lineCap=1, lineJoin=1,
+                    )
+                for li, line in enumerate(lines):
+                    self._draw_rich_line(line, cx + box + text_gap, self.y + li * line_h, size)
+            self.y += row_h + row_spacing
+        self.y += cs.get("spacing_after", p.get("spacing_after", 12.0)) - row_spacing
+
     # --- Table ---
+
+    def _table_bold_fontname(self, body_font: str, header_font: str) -> str:
+        """Vet font voor ``<b>``-cellen.
+
+        ``_derive_bold_fontname`` vindt alleen een vette variant als de naam
+        'Bold' bevat of Inter is; anders geeft hij de headerfont terug, en die
+        is bij kba (SegoeUI) en 3bm (GothamBook) gewoon regular: vet was dan
+        onzichtbaar. Dan de template-rol ``fonts.bold``, anders Liberation Bold.
+        """
+        derived = _derive_bold_fontname(body_font, fallback_bold=header_font)
+        if "bold" in derived.lower():
+            return derived
+        return self._font_role("bold") or "LiberationSans-Bold"
+
+    def _cell_spec(
+        self, value: object, row: int, col: int, cell_styles: dict,
+    ) -> _CellSpec:
+        """Normaliseer een tabelcel; ``cell_styles["r,c"]`` vult objectvelden aan."""
+        extra = cell_styles.get(f"{row},{col}") if cell_styles else None
+        if not isinstance(value, dict) and not extra:
+            text, bold = _parse_cell(value)
+            return _CellSpec(text, bold)
+        obj = dict(extra or {})
+        if isinstance(value, dict):
+            obj.update(value)
+        else:
+            text, bold = _parse_cell(value)
+            obj.setdefault("text", text)
+            if bold:
+                obj.setdefault("bold", True)
+        runs = runs_of(obj)
+        raw_text = obj.get("text")
+        text = plain_text(runs) if runs else ("" if raw_text is None else str(raw_text))
+        color = obj.get("color") or obj.get("text_color")
+        bg = obj.get("bg_color")
+        align = obj.get("align", "left")
+        return _CellSpec(
+            text=text,
+            bold=bool(obj.get("bold")),
+            italic=bool(obj.get("italic")),
+            color=self._run_color(color, "") or None if color else None,
+            bg_color=self._run_color(bg, "") or None if bg else None,
+            align=align if align in ("left", "center", "right") else "left",
+            runs=runs,
+            rich=True,
+        )
+
+    def _table_group_row(
+        self,
+        row_specs: list[_CellSpec],
+        x: float,
+        max_w: float,
+        cell_pad: float,
+        cell_line_h: float,
+        fontname: str,
+        fontsize: float,
+        group_s: dict,
+        grid_color: tuple,
+        render_header: Callable[[], None],
+        header_h: float,
+        pad_t: float = 3.0,
+        pad_b: float = 3.0,
+        pad_r: float | None = None,
+        rule_width: float = 0.3,
+    ) -> None:
+        """Groepsrij: tekst van de eerste gevulde cel over alle kolommen, vet op vlak."""
+        spec = next((sp for sp in row_specs if sp.text or sp.runs), _CellSpec("", False))
+        bold = group_s.get("bold", True)
+        runs = [
+            r if "label" in r else {**r, "bold": r.get("bold", bold)}
+            for r in (spec.runs or [{"text": spec.text, "italic": spec.italic}])
+        ]
+        color = spec.color or self._color(group_s, "color", "primary", "table.group.color")
+        pad_r = cell_pad if pad_r is None else pad_r
+        lines = self._layout_runs(runs, fontname, fontsize, color, max_w - cell_pad - pad_r)
+        row_h = max(len(lines) * cell_line_h + pad_t + pad_b, cell_line_h + pad_t + pad_b)
+        if self._check_overflow(row_h):
+            render_header()
+            self.y += header_h
+        bg = spec.bg_color or self._color(group_s, "background", "surface", "table.group.bg")
+        self.page.draw_rect(
+            fitz.Rect(x, self.y, x + max_w, self.y + row_h), color=None, fill=_hex_to_rgb(bg)
+        )
+        for li, line in enumerate(lines):
+            self._draw_rich_line(
+                line, x + cell_pad, self.y + pad_t + li * cell_line_h, fontsize
+            )
+        self.page.draw_line(
+            fitz.Point(x, self.y + row_h),
+            fitz.Point(x + max_w, self.y + row_h),
+            color=grid_color,
+            width=rule_width,
+        )
+        self.y += row_h
 
     def table(self, block: dict) -> None:
         """Render a table block with header and rows.
@@ -1836,9 +2773,19 @@ class ContentRenderer:
         raw_widths = block.get("column_widths")
         title = block.get("title", "")
         style = block.get("style", "")
-        num_cols = (
-            len(headers_raw) if headers_raw else (len(rows_raw[0]) if rows_raw else 0)
-        )
+        group_rows = {
+            int(rs["row"])
+            for rs in block.get("row_styles") or []
+            if isinstance(rs, dict) and rs.get("style") == "group" and "row" in rs
+        }
+        cell_styles = block.get("cell_styles") or {}
+        if headers_raw:
+            num_cols = len(headers_raw)
+        else:
+            data_rows = [r for i, r in enumerate(rows_raw) if i not in group_rows]
+            num_cols = max(
+                (len(r) for r in data_rows), default=len(rows_raw[0]) if rows_raw else 0
+            )
         if num_cols == 0:
             return
 
@@ -1848,12 +2795,40 @@ class ContentRenderer:
         # Body cellen krijgen per cel een (text, is_bold) tuple zodat
         # ``<b>...</b>`` markup uit de payload bold gerenderd kan worden
         # zonder dat de tags letterlijk in de PDF terechtkomen.
+        # Objectcellen ({runs} of {text, bold, ...}) en cell_styles geven een
+        # opgemaakte cel; gewone cellen volgen ongewijzigd het oude pad.
+        specs: list[list[_CellSpec]] = [
+            [self._cell_spec(cell, r, c, cell_styles) for c, cell in enumerate(row)]
+            for r, row in enumerate(rows_raw)
+        ]
+        # Groepsrijen tellen niet mee voor kolombreedtes (ze overspannen alles).
         rows: list[list[tuple[str, bool]]] = [
-            [_parse_cell(cell) for cell in row] for row in rows_raw
+            [(sp.text, sp.bold) for sp in row]
+            for r, row in enumerate(specs) if r not in group_rows
         ]
 
         # --- Resolve column widths ---
-        cell_pad = 5  # horizontal padding per side
+        # Meten met de fonts waarmee ook getekend wordt.
+        h_font_m = header_s.get("font", "Inter-Bold")
+        # Kop in kapitalen en met letterspatiering: meten zoals getekend wordt.
+        h_char_space = float(header_s.get("char_space", 0.0))
+        if header_s.get("uppercase", False):
+            headers = [h.upper() for h in headers]
+
+        def head_w(text: str, size: float) -> float:
+            return self.fonts.measure(
+                text, size, bold=True, fontname=h_font_m
+            ) + h_char_space * max(len(text) - 1, 0)
+
+        b_font_m = body_s.get("font", "Inter-Regular")
+        b_bold_font_m = self._table_bold_fontname(b_font_m, h_font_m)
+        # Celpadding (pt); default = oud gedrag (5 links/rechts, 3 boven/onder).
+        pad_cfg = s.get("cell_padding", {})
+        pad_l = float(pad_cfg.get("left", 5.0))
+        pad_r = float(pad_cfg.get("right", 5.0))
+        pad_t = float(pad_cfg.get("top", 3.0))
+        pad_b = float(pad_cfg.get("bottom", 3.0))
+        pad_h = pad_l + pad_r
         if raw_widths and len(raw_widths) >= num_cols:
             total = sum(raw_widths[:num_cols])
             if total > 0:
@@ -1866,16 +2841,17 @@ class ContentRenderer:
             measured = []
             for i in range(num_cols):
                 h_text = headers[i] if i < len(headers) else ""
-                max_cell_w = self.fonts.measure(h_text, header_font_size, bold=True)
+                max_cell_w = head_w(h_text, header_font_size)
                 body_font_size = body_s.get("size", 8)
                 for row in rows[:10]:
                     if i < len(row):
                         cell_text, cell_bold = row[i]
                         cell_w = self.fonts.measure(
-                            cell_text, body_font_size, bold=cell_bold
+                            cell_text, body_font_size, bold=cell_bold,
+                            fontname=b_bold_font_m if cell_bold else b_font_m,
                         )
                         max_cell_w = max(max_cell_w, cell_w)
-                measured.append(max_cell_w + cell_pad * 2)
+                measured.append(max_cell_w + pad_h)
             total_measured = sum(measured)
             if total_measured > 0:
                 col_widths_pt = [(m / total_measured) * max_w for m in measured]
@@ -1893,35 +2869,52 @@ class ContentRenderer:
             h_text = headers[i] if i < len(headers) else ""
             h_tokens = h_text.split() or [""]
             min_w = max(
-                self.fonts.measure(t, header_font_size, bold=True) for t in h_tokens
+                head_w(t, header_font_size) for t in h_tokens
             )
             # Widest single token in body rows
             for row in rows:
                 cell_text, cell_bold = row[i] if i < len(row) else ("", False)
                 tokens = cell_text.split() or [""]
                 token_max = max(
-                    self.fonts.measure(t, body_font_size, bold=cell_bold)
+                    self.fonts.measure(
+                        t, body_font_size, bold=cell_bold,
+                        fontname=b_bold_font_m if cell_bold else b_font_m,
+                    )
                     for t in tokens
                 )
                 min_w = max(min_w, token_max)
-            min_widths.append(min_w + cell_pad * 2)
+            min_widths.append(min_w + pad_h)
 
-        # Redistribute: bump undersized columns, shrink oversized ones
-        deficit = 0.0
-        flexible_width = 0.0
-        for i in range(num_cols):
-            if col_widths_pt[i] < min_widths[i]:
-                deficit += min_widths[i] - col_widths_pt[i]
-            else:
-                flexible_width += col_widths_pt[i]
-
-        if deficit > 0 and flexible_width > 0:
+        # Redistribute: bump undersized columns, shrink oversized ones.
+        # Herhaal zolang het krimpen een flexibele kolom onder zijn minimum
+        # duwt (anders breekt een woord midden af, bijv. "Verlee|nd"). De
+        # eerste ronde is gelijk aan de oude eenmalige herverdeling.
+        locked = [col_widths_pt[i] < min_widths[i] for i in range(num_cols)]
+        for _ in range(num_cols):
+            deficit = sum(
+                min_widths[i] - col_widths_pt[i]
+                for i in range(num_cols)
+                if locked[i] and col_widths_pt[i] < min_widths[i]
+            )
+            flexible_width = sum(
+                col_widths_pt[i] for i in range(num_cols) if not locked[i]
+            )
+            if deficit <= 0 or flexible_width <= 0:
+                break
             shrink_factor = max((flexible_width - deficit) / flexible_width, 0.5)
             for i in range(num_cols):
-                if col_widths_pt[i] < min_widths[i]:
-                    col_widths_pt[i] = min_widths[i]
+                if locked[i]:
+                    col_widths_pt[i] = max(col_widths_pt[i], min_widths[i])
                 else:
                     col_widths_pt[i] *= shrink_factor
+            newly = [
+                i for i in range(num_cols)
+                if not locked[i] and col_widths_pt[i] < min_widths[i]
+            ]
+            if not newly or shrink_factor == 0.5:
+                break
+            for i in newly:
+                locked[i] = True
 
         h_fontname = header_s.get("font", "Inter-Bold")
         h_fontsize = header_s.get("size", 9)
@@ -1929,31 +2922,109 @@ class ContentRenderer:
         b_fontname = body_s.get("font", "Inter-Regular")
         b_fontsize = body_s.get("size", 8)
         b_color = _hex_to_rgb(self._color(body_s, "color", "primary", "table.body.text"))
-        bg_color = _hex_to_rgb(
-            self._color(header_s, "background", "text_accent", "table.header.background")
+        # background: none = kop zonder vulling (bijv. kba: kleine kapitalen op een lijn).
+        bg_color = (
+            None if header_s.get("background") == "none" else _hex_to_rgb(
+                self._color(header_s, "background", "text_accent", "table.header.background")
+            )
         )
         stripe_color = _hex_to_rgb(self._color(s, "stripe_color", "surface", "table.stripe"))
         grid_color = _hex_to_rgb(self._color(s, "grid_color", "separator", "table.grid"))
         line_color_hdr = _hex_to_rgb(
             self._color(s, "header_grid_color", "paper", "table.header_grid")
         )
-        cell_line_h = b_fontsize * 1.35  # line height within cells
-
+        cell_line_h = b_fontsize * body_s.get("line_height_factor", 1.35)
+        grid_vertical = s.get("grid_vertical", True)
+        body_rule = s.get("row_rule", {})
+        row_rule_color = (
+            _hex_to_rgb(self._color(body_rule, "color", "separator", "table.row_rule"))
+            if body_rule else grid_color
+        )
+        row_rule_width = float(body_rule.get("width", 0.3))
         # Pre-wrap all header cells
         header_wrapped: list[list[str]] = []
         for i, h in enumerate(headers):
             w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
-            lines = self.fonts.wrap_text(str(h), h_fontsize, w - cell_pad * 2, bold=True)
+            if h_char_space:
+                # Woordgewijs met letterspatiering; een te lang woord blijft heel
+                # (de minimumbreedte van de kolom houdt er al rekening mee).
+                lines = []
+                for word in str(h).split():
+                    trial = f"{lines[-1]} {word}" if lines else word
+                    if lines and head_w(trial, h_fontsize) <= w - pad_h:
+                        lines[-1] = trial
+                    else:
+                        lines.append(word)
+            else:
+                lines = self.fonts.wrap_text(
+                    str(h), h_fontsize, w - pad_h, bold=True, fontname=h_fontname
+                )
             header_wrapped.append(lines if lines else [""])
         header_max_lines = max((len(lines) for lines in header_wrapped), default=1)
-        header_h = max(header_max_lines * (h_fontsize * 1.35) + 8, 20.0)
+        header_h = max(
+            header_max_lines * (h_fontsize * 1.35) + header_s.get("padding", 8.0),
+            header_s.get("min_height", 20.0),
+        )
+        # Zonder "headers"-sleutel geen kopregel; een expliciete lege lijst
+        # houdt het oude gedrag (lege kopband) zodat bestaande invoer gelijk blijft.
+        has_header = bool(headers_raw) or "headers" in block
+        if not has_header:
+            header_h = 0.0
 
         spacing_before = s.get("spacing_before", 20.0)
+        b_color_hex = self._color(body_s, "color", "primary", "table.body.text")
+        # Bold body font name (via centrale helper). Valt terug op de
+        # header font wanneer die niet direct afgeleid kan worden.
+        b_bold_fontname = self._table_bold_fontname(b_fontname, h_fontname)
+
+        def wrap_row(row_specs: list[_CellSpec]) -> tuple[list[list], float]:
+            """Celregels en rijhoogte. Gewone cellen als (text, is_bold)-regels,
+            opgemaakte cellen als rich_text-regels."""
+            row_wrapped: list[list] = []
+            for i in range(num_cols):
+                spec = row_specs[i] if i < len(row_specs) else _CellSpec("", False)
+                w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
+                if spec.rich:
+                    row_wrapped.append(self._layout_runs(
+                        spec.as_runs(), b_fontname, b_fontsize,
+                        spec.color or b_color_hex, w - pad_h,
+                    ))
+                    continue
+                lines = self.fonts.wrap_text(
+                    spec.text, b_fontsize, w - pad_h, bold=spec.bold,
+                    fontname=b_bold_fontname if spec.bold else b_fontname,
+                )
+                wrapped_lines = lines if lines else [""]
+                row_wrapped.append([(line, spec.bold) for line in wrapped_lines])
+            max_lines = max(len(lines) for lines in row_wrapped)
+            pad_v = pad_t + pad_b
+            return row_wrapped, max(max_lines * cell_line_h + pad_v, cell_line_h + pad_v)
+
+        def row_height(idx: int) -> float:
+            if idx not in group_rows:
+                return wrap_row(specs[idx])[1]
+            spec = next((sp for sp in specs[idx] if sp.text or sp.runs), _CellSpec("", False))
+            runs = [
+                r if "label" in r else {**r, "bold": True}
+                for r in (spec.runs or [{"text": spec.text}])
+            ]
+            lines = self._layout_runs(
+                runs, b_fontname, b_fontsize, b_color_hex, max_w - pad_h
+            )
+            return max(len(lines) * cell_line_h + pad_t + pad_b, cell_line_h + pad_t + pad_b)
+
+        # Kop niet los onderaan een pagina: kop + de eerste keep_rows rijen
+        # (standaard 2) moeten samen passen, anders begint de tabel op een
+        # nieuwe pagina. Begrensd op een volle pagina.
+        keep_rows = int(block.get("keep_rows", s.get("keep_rows", 2)))
+        keep_h = header_h + sum(row_height(i) for i in range(min(keep_rows, len(specs))))
+        top = self.tpl.standaard.get("margins", {}).get("top", 74.9)
+        keep_h = min(keep_h, self.y_max - top - spacing_before - 16)
 
         # Title above table
         if title:
             title_s = s.get("title", {})
-            self._check_overflow(spacing_before + 16 + header_h)
+            self._check_overflow(spacing_before + 16 + max(header_h, keep_h))
             self.y += spacing_before
             self._text(
                 x, self.y, title,
@@ -1963,30 +3034,48 @@ class ContentRenderer:
             )
             self.y += 16
         else:
-            self._check_overflow(spacing_before + header_h + cell_line_h + 8)
+            self._check_overflow(spacing_before + max(header_h + cell_line_h + 8, keep_h))
             self.y += spacing_before
 
         self._check_overflow(header_h + cell_line_h + 8)  # at least header + 1 row line
 
         # --- Render header helper ---
         def render_header():
+            if not has_header:
+                # Zonder kopregel sluit een bovenlijn de tabel af (ook na paginabreuk).
+                self.page.draw_line(
+                    fitz.Point(x, self.y), fitz.Point(x + max_w, self.y),
+                    color=grid_color, width=0.5,
+                )
+                return
             header_rect = fitz.Rect(x, self.y, x + max_w, self.y + header_h)
-            self.page.draw_rect(header_rect, color=None, fill=bg_color)
+            if bg_color is not None:
+                self.page.draw_rect(header_rect, color=None, fill=bg_color)
             cx = x
             for i, lines in enumerate(header_wrapped):
                 w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
-                # Vertically center the wrapped text block
                 text_block_h = len(lines) * (h_fontsize * 1.35)
-                y_start = self.y + (header_h - text_block_h) / 2
+                if header_s.get("valign") == "bottom":
+                    y_start = self.y + header_h - header_s.get("padding_bottom", 4.0) - text_block_h
+                else:
+                    # Vertically center the wrapped text block
+                    y_start = self.y + (header_h - text_block_h) / 2
                 for li, line in enumerate(lines):
                     font_obj = self.fonts.get_fitz_font(h_fontname)
-                    tw = fitz.TextWriter(self.page.rect)
-                    tw.append(
-                        (cx + cell_pad, y_start + h_fontsize * 0.8 + li * (h_fontsize * 1.35)),
-                        line, font=font_obj, fontsize=h_fontsize,
+                    self._text_spaced(
+                        cx + pad_l, y_start + h_fontsize * 0.8 + li * (h_fontsize * 1.35),
+                        line, font_obj, h_fontsize, h_color, h_char_space,
                     )
-                    tw.write_text(self.page, color=h_color)
                 cx += w
+            rule = header_s.get("rule")
+            if rule:
+                self.page.draw_line(
+                    fitz.Point(x, self.y + header_h), fitz.Point(x + max_w, self.y + header_h),
+                    color=_hex_to_rgb(self._color(rule, "color", "primary", "table.header.rule")),
+                    width=float(rule.get("width", 1.0)),
+                )
+            if not grid_vertical:
+                return
             # Vertical grid lines in header
             cx = x
             for i in range(num_cols - 1):
@@ -2001,25 +3090,18 @@ class ContentRenderer:
         render_header()
         self.y += header_h
 
-        # Bold body font name (via centrale helper). Valt terug op de
-        # header font wanneer die niet direct afgeleid kan worden.
-        b_bold_fontname = _derive_bold_fontname(b_fontname, fallback_bold=h_fontname)
+        group_s = s.get("group", {})
 
         # --- Body rows ---
-        for row_idx, row in enumerate(rows):
-            # Pre-wrap all cells to determine row height. Elke cell is een
-            # (text, is_bold) tuple zodat we de juiste font kunnen kiezen.
-            row_wrapped: list[list[tuple[str, bool]]] = []
-            for i in range(num_cols):
-                cell_text, cell_bold = row[i] if i < len(row) else ("", False)
-                w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
-                lines = self.fonts.wrap_text(
-                    cell_text, b_fontsize, w - cell_pad * 2, bold=cell_bold
+        for row_idx, row_specs in enumerate(specs):
+            if row_idx in group_rows:
+                self._table_group_row(
+                    row_specs, x, max_w, pad_l, cell_line_h, b_fontname, b_fontsize,
+                    group_s, row_rule_color, render_header, header_h,
+                    pad_t=pad_t, pad_b=pad_b, pad_r=pad_r, rule_width=row_rule_width,
                 )
-                wrapped_lines = lines if lines else [""]
-                row_wrapped.append([(line, cell_bold) for line in wrapped_lines])
-            max_lines = max(len(lines) for lines in row_wrapped)
-            row_h = max(max_lines * cell_line_h + 6, cell_line_h + 6)
+                continue
+            row_wrapped, row_h = wrap_row(row_specs)
 
             if self._check_overflow(row_h):
                 # Re-render header on new page
@@ -2035,13 +3117,32 @@ class ContentRenderer:
             cx = x
             for i, lines in enumerate(row_wrapped):
                 w = col_widths_pt[i] if i < len(col_widths_pt) else col_widths_pt[-1]
-                y_text = self.y + 3  # top padding
+                spec = row_specs[i] if i < len(row_specs) else _CellSpec("", False)
+                y_text = self.y + pad_t  # top padding
+                if spec.bg_color:
+                    self.page.draw_rect(
+                        fitz.Rect(cx, self.y, cx + w, self.y + row_h),
+                        color=None, fill=_hex_to_rgb(spec.bg_color),
+                    )
+                if spec.rich:
+                    inner_w = w - pad_h
+                    for li, line in enumerate(lines):
+                        offset = 0.0
+                        if spec.align == "center":
+                            offset = (inner_w - line.width) / 2
+                        elif spec.align == "right":
+                            offset = inner_w - line.width
+                        self._draw_rich_line(
+                            line, cx + pad_l + offset, y_text + li * cell_line_h, b_fontsize
+                        )
+                    cx += w
+                    continue
                 for li, (line, line_bold) in enumerate(lines):
                     font_name = b_bold_fontname if line_bold else b_fontname
                     font_obj = self.fonts.get_fitz_font(font_name)
                     tw = fitz.TextWriter(self.page.rect)
                     tw.append(
-                        (cx + cell_pad, y_text + b_fontsize * 0.8 + li * cell_line_h),
+                        (cx + pad_l, y_text + b_fontsize * 0.8 + li * cell_line_h),
                         line, font=font_obj, fontsize=b_fontsize,
                     )
                     tw.write_text(self.page, color=b_color)
@@ -2049,7 +3150,7 @@ class ContentRenderer:
 
             # Vertical grid lines between columns
             cx = x
-            for i in range(num_cols - 1):
+            for i in range(num_cols - 1 if grid_vertical else 0):
                 cx += col_widths_pt[i]
                 self.page.draw_line(
                     fitz.Point(cx, self.y),
@@ -2058,23 +3159,26 @@ class ContentRenderer:
                     width=0.3,
                 )
 
-            # Bottom border
-            self.page.draw_line(
-                fitz.Point(x, self.y + row_h),
-                fitz.Point(x + max_w, self.y + row_h),
-                color=grid_color,
-                width=0.3,
-            )
+            # Bottom border (last_row_rule: false = geen lijn onder de laatste rij)
+            is_last_row = row_idx == len(specs) - 1
+            if not is_last_row or s.get("last_row_rule", True):
+                self.page.draw_line(
+                    fitz.Point(x, self.y + row_h),
+                    fitz.Point(x + max_w, self.y + row_h),
+                    color=row_rule_color,
+                    width=row_rule_width,
+                )
 
             self.y += row_h
 
         # Final bottom border
-        self.page.draw_line(
-            fitz.Point(x, self.y),
-            fitz.Point(x + max_w, self.y),
-            color=grid_color,
-            width=0.5,
-        )
+        if s.get("final_rule", True):
+            self.page.draw_line(
+                fitz.Point(x, self.y),
+                fitz.Point(x + max_w, self.y),
+                color=grid_color,
+                width=0.5,
+            )
 
         self.y += s.get("spacing_after", 20.0)
 
@@ -2111,15 +3215,36 @@ class ContentRenderer:
         target_w = (width_mm * 2.8346) if width_mm else max_w
         target_w = min(target_w, max_w)
 
-        # Get image aspect ratio
-        try:
-            from PIL import Image as PILImage
+        # SVG als vector: omzetten naar een PDF-pagina en die plaatsen.
+        svg_doc: fitz.Document | None = None
+        if _is_svg(img_path):
+            try:
+                with fitz.open(str(img_path), filetype="svg") as svg:
+                    svg_doc = fitz.open("pdf", svg.convert_to_pdf())
+                svg_rect = svg_doc[0].rect
+                aspect = svg_rect.height / svg_rect.width
+            except Exception as e:  # noqa: BLE001 - MuPDF-fouttypes verschillen per versie
+                label = src if isinstance(src, str) else img_path.name
+                logger.error("SVG kon niet worden geplaatst: %s (%s)", label, e)
+                self.y += 12
+                self._text(
+                    x, self.y, f"[SVG kon niet worden geplaatst: {Path(label).name}]",
+                    error_s.get("font", "Inter-Regular"),
+                    error_s.get("size", 9.5),
+                    self._color(error_s, "color", "warning", "image.error"),
+                )
+                self.y += 16
+                return
+        else:
+            # Get image aspect ratio
+            try:
+                from PIL import Image as PILImage
 
-            with PILImage.open(img_path) as im:
-                iw, ih = im.size
-            aspect = ih / iw
-        except (ImportError, OSError, ZeroDivisionError):
-            aspect = 0.75  # fallback 4:3
+                with PILImage.open(img_path) as im:
+                    iw, ih = im.size
+                aspect = ih / iw
+            except (ImportError, OSError, ZeroDivisionError):
+                aspect = 0.75  # fallback 4:3
 
         target_h = target_w * aspect
         max_h = self.y_max - self.y - 30  # leave room for caption
@@ -2132,7 +3257,13 @@ class ContentRenderer:
         self.y += 8
         rect = fitz.Rect(x, self.y, x + target_w, self.y + target_h)
         try:
-            self.page.insert_image(rect, filename=str(img_path))
+            if svg_doc is not None:
+                try:
+                    self.page.show_pdf_page(rect, svg_doc, 0)
+                finally:
+                    svg_doc.close()
+            else:
+                self.page.insert_image(rect, filename=str(img_path))
         except (OSError, ValueError, RuntimeError) as e:
             logger.warning("Image insert failed: %s", e)
             self._text(
@@ -2667,24 +3798,58 @@ class ContentRenderer:
                 self._add_page_number()
             self._orientation = section_orientation
 
-        if section.get("page_break_before", False) or level == 1:
+        # Level 1 begint altijd op een nieuwe pagina (page_break_before: false
+        # verandert dat niet: clients sturen dat veld standaard mee).
+        # continue_on_page: true laat een level-1-hoofdstuk doorlopen op de
+        # huidige inhoudspagina (korte hoofdstukken). Een orientatiewissel,
+        # een ontbrekende pagina of een niet-inhoudspagina (bijlage-
+        # scheidingsblad) geeft altijd een nieuwe pagina.
+        continue_on_page = (
+            level == 1
+            and section.get("continue_on_page") is True
+            and not section.get("page_break_before", False)
+            and self._page_template == "standaard"
+        )
+        page_break = section.get("page_break_before", False) or (
+            level == 1 and not continue_on_page
+        )
+        if page_break or orientation_changed or self.page is None:
             self._new_page()
-        elif orientation_changed:
-            # Forceer nieuwe pagina bij oriëntatiewissel
-            self._new_page()
+        elif continue_on_page:
+            # Doorlopend hoofdstuk: witruimte boven de kop (bovenaan een
+            # pagina is die er via de marge al). Past de kop met een paar
+            # regels inhoud niet meer, dan toch een nieuwe pagina.
+            h1 = self.blocks.get("heading_1", {})
+            gap = h1.get("spacing_before_continued", 30.0)
+            needed = (
+                gap
+                + h1.get("number", {}).get("size", 18.0)
+                + h1.get("spacing_after", 33.9)
+                + h1.get("keep_with_next", 40.0)
+            )
+            if not self._check_overflow(needed):
+                self.y += gap
 
         number = self._resolve_heading_number(level, explicit_number)
 
         # Titel moet altijd getekend worden wanneer aanwezig, ook als
         # er geen (auto)nummer beschikbaar is.
         if title or number:
+            reference = str(section.get("reference") or "")
             if level == 1:
-                self.heading_1(number, title)
+                self.heading_1(number, title, str(section.get("part") or ""), reference)
             elif level == 2:
-                self.heading_2(number, title)
+                self._keep_next = self._keep_estimate(
+                    {"type": "heading_2"}, section.get("content") or []
+                )
+                self.heading_2(number, title, reference)
+                self._keep_next = 0.0
 
-        for block in section.get("content", []):
+        content = section.get("content", [])
+        for i, block in enumerate(content):
+            self._keep_next = self._keep_estimate(block, content[i + 1:])
             self._render_block(block)
+            self._keep_next = 0.0
 
         # Add page number if this was a top-level section start
         if level == 1:
@@ -2704,14 +3869,21 @@ class ContentRenderer:
         block_type = block.get("type", "")
         if block_type == "paragraph":
             style = block.get("style", "")
+            heading_text = block.get("text") or plain_text(runs_of(block) or [])
             if style in ("Heading1", "heading_1"):
                 number = self._resolve_heading_number(1, block.get("number") or "")
-                self.heading_1(number, block.get("text", ""))
+                self.heading_1(number, heading_text)
             elif style in ("Heading2", "heading_2"):
                 number = self._resolve_heading_number(2, block.get("number") or "")
-                self.heading_2(number, block.get("text", ""))
+                self.heading_2(number, heading_text)
+            elif runs_of(block) is not None:
+                self.rich_paragraph(block["runs"])
             else:
                 self.paragraph(block.get("text", ""))
+        elif block_type == "definition_list":
+            self.definition_list(block)
+        elif block_type == "checklist":
+            self.checklist(block)
         elif block_type == "bullet_list":
             self.bullet_list(block.get("items", []))
         elif block_type == "heading_2":
@@ -2742,6 +3914,8 @@ class ContentRenderer:
     def render_bijlage_divider(self, nummer: str, titel: str) -> None:
         """Render appendix divider page."""
         self._new_page("bijlagen")
+        self.divider_pages.append(len(self.doc) - 1)
+        self.divider_log.append((nummer, titel, self.current_page_nr))
         # Number
         bijl_cfg = self.tpl.bijlage.get("dynamic_fields", {})
         nr_cfg = bijl_cfg.get("nummer", {})
@@ -2773,12 +3947,147 @@ class ContentRenderer:
         self.current_page_nr += 1
 
     def render_achterblad(self) -> None:
-        """Append static backcover PDF."""
+        """Append static backcover PDF, of het achterblad uit static_elements."""
         path = self.stationery.get("achterblad")
         if path and path.exists():
             src = fitz.open(str(path))
             self.doc.insert_pdf(src)
             src.close()
+            self.backcover_added = True
+            return
+        elements = brand_page_elements(self._brand_config, "backcover")
+        if elements:
+            src = render_static_pages(
+                [(elements, self.static_context)], brand_config=self._brand_config,
+                fonts=self.fonts, block="backcover.static_elements",
+            )
+            self.doc.insert_pdf(src)
+            src.close()
+            self.backcover_added = True
+
+    def colofon_as_content(self, data: dict) -> bool:
+        """Colofon als inhoudspagina (brand ``pages.colofon.render: content``)."""
+        if not data.get("colofon", {}).get("enabled", True):
+            return False
+        path = self.stationery.get("colofon")
+        if path and path.exists():
+            return False
+        cfg = (getattr(self._brand_config, "pages", None) or {}).get("colofon", {}) or {}
+        return cfg.get("render") == "content"
+
+    def render_colofon_page(self, data: dict) -> None:
+        """Colofon als inhoudspagina: kicker, titel, gegevens, revisies, eigen blokken.
+
+        Stijl uit brand ``pages.colofon.content_style`` (kicker, title); de
+        gegevens gebruiken definition_list en de revisies de tabelstijl. Eigen
+        rijen via ``colofon.rows``, extra blokken via ``colofon.content``.
+        """
+        col = data.get("colofon", {}) or {}
+        cfg = (getattr(self._brand_config, "pages", None) or {}).get("colofon", {}) or {}
+        style = cfg.get("content_style", {})
+        p = self.blocks.get("paragraph", {})
+        x = style.get("x", p.get("x", 125.4))
+        self._new_page()
+        k = style.get("kicker", {})
+        kicker = str(col.get("kicker", k.get("text", "Colofon")))
+        if k.get("uppercase", True):
+            kicker = kicker.upper()
+        k_size = k.get("size", 7.5)
+        k_font = self.fonts.get_fitz_font(k.get("font", p.get("font", "Inter-Regular")))
+        self._text_spaced(
+            x, self.y + k_size * 0.8, kicker, k_font, k_size,
+            _hex_to_rgb(self._color(k, "color", "secondary", "colofon.kicker")),
+            float(k.get("char_space", 0.0)),
+        )
+        self.y += k_size + k.get("spacing_after", 11.3)
+        t = style.get("title", {})
+        title = str(col.get("title") or " ".join(
+            v for v in (data.get("report_type", ""), data.get("project", "")) if v
+        ))
+        t_size = t.get("size", 24.0)
+        t_font = t.get("font", p.get("font", "Inter-Regular"))
+        max_w = style.get("max_width", p.get("max_width", 393.0))
+        for line in self._title_lines(title, t_font, t_size, max_w):
+            self._text(x, self.y, line, t_font, t_size,
+                       self._color(t, "color", "primary", "colofon.title"))
+            self.y += t_size * 1.2
+        self.y += t.get("spacing_after", 22.7) - t_size * 0.2
+        subtitle = col.get("subtitle") or col.get("documentgegevens")
+        if subtitle:
+            self.paragraph(str(subtitle))
+
+        rows = col.get("rows")
+        if rows is None:
+            author = ", ".join(
+                v for v in (col.get("adviseur_naam", ""), col.get("adviseur_bedrijf", "")) if v
+            ) or data.get("author", "")
+            candidates = [
+                ("Project", data.get("project", "")),
+                ("Projectnummer", data.get("project_number", "")),
+                ("Opdrachtgever", col.get("opdrachtgever_naam", data.get("client", ""))),
+                ("Opgesteld door", author),
+                ("Fase", col.get("fase", "")),
+                ("Datum", col.get("datum") or format_date(
+                    data.get("date", ""), date_style(self._brand_config))),
+                ("Versie", data.get("version", "")),
+                ("Status", col.get("status_colofon", data.get("status", ""))),
+                ("Kenmerk", col.get("kenmerk", "")),
+                ("Normen", col.get("normen", "")),
+            ]
+            rows = [{"label": lbl, "value": val} for lbl, val in candidates if val]
+        if rows:
+            self.definition_list({"rows": rows})
+        history = col.get("revision_history") or []
+        if history:
+            self.table({
+                "title": col.get("revision_title", "Versiebeheer"),
+                "headers": ["Versie", "Datum", "Door", "Wijziging"],
+                # Datumkolom breed genoeg voor '28 september 2026' (F19).
+                "column_widths": [11, 27, 11, 67],
+                "rows": [
+                    [h.get("version", ""),
+                     format_date(h.get("date", ""), date_style(self._brand_config)),
+                     h.get("author", ""), h.get("description", "")]
+                    for h in history
+                ],
+            })
+        # Geen hoofdstuknummering in het colofon (anders "0.1", F16).
+        auto_number = self._auto_number_enabled
+        self._auto_number_enabled = False
+        for block in col.get("content", []) or []:
+            self._render_block(block)
+        self._auto_number_enabled = auto_number
+        if col.get("disclaimer"):
+            self._colofon_disclaimer(str(col["disclaimer"]), style.get("disclaimer", {}), x, max_w)
+        self._add_page_number()
+
+    def _colofon_disclaimer(self, text: str, ds: dict, x: float, max_w: float) -> None:
+        """Disclaimer-blok: vlak met gekleurde balk links (huisstijl .disclaimer)."""
+        p = self.blocks.get("paragraph", {})
+        size = ds.get("size", 8.5)
+        lh = ds.get("line_height", size * 1.5)
+        pad_v = ds.get("padding_v", 14.2)  # 5 mm
+        pad_h = ds.get("padding_h", 17.0)  # 6 mm
+        bar = ds.get("bar_width", 3.4)  # 1.2 mm
+        color = self._color(ds, "color", "text_light", "colofon.disclaimer.text")
+        lines = self._layout_runs(
+            [{"text": text}], ds.get("font", p.get("font", "Inter-Regular")), size, color,
+            max_w - bar - 2 * pad_h,
+        )
+        box_h = len(lines) * lh + 2 * pad_v
+        self.y += ds.get("spacing_before", 11.3)
+        self._check_overflow(box_h)
+        self.page.draw_rect(
+            fitz.Rect(x, self.y, x + max_w, self.y + box_h), color=None,
+            fill=_hex_to_rgb(self._color(ds, "background", "surface", "colofon.disclaimer.bg")),
+        )
+        self.page.draw_rect(
+            fitz.Rect(x, self.y, x + bar, self.y + box_h), color=None,
+            fill=_hex_to_rgb(self._color(ds, "bar_color", "accent", "colofon.disclaimer.bar")),
+        )
+        for i, line in enumerate(lines):
+            self._draw_rich_line(line, x + bar + pad_h, self.y + pad_v + i * lh, size)
+        self.y += box_h
 
     def save(self, output_path: Path) -> None:
         """Save the assembled PyMuPDF document."""
@@ -3023,19 +4332,49 @@ class ReportGeneratorV2:
 
             # 3. Content (TOC + sections + appendices + backcover)
             logger.info("Generating content...")
-            content = ContentRenderer(
-                self.templates, self.fonts, stationery,
-                brand_config=self.brand_config,
-            )
-            # Adjust page numbering based on which parts are included
-            content.current_page_nr = len(parts) + 1
-            self._render_content(content, data)
+            toc_reserve = 1
+            for _attempt in range(3):
+                content = ContentRenderer(
+                    self.templates, self.fonts, stationery,
+                    brand_config=self.brand_config,
+                )
+                # Adjust page numbering based on which parts are included
+                content.current_page_nr = len(parts) + 1
+                content.toc_reserve = toc_reserve
+                self._render_content(content, data)
+                used = content.toc_pages_used
+                if not used or used == toc_reserve:
+                    break
+                # Inhoudsopgave langer/korter dan gereserveerd: paginanummers in
+                # de TOC en op de pagina's zouden verschuiven. Opnieuw (F13).
+                logger.info("Inhoudsopgave %d blz. i.p.v. %d: opnieuw renderen", used, toc_reserve)
+                toc_reserve = used
             content.save(tmp_content)
             parts.append(tmp_content)
 
             # 4. Merge
             logger.info("Merging PDF...")
             self._merge_pdfs(parts, output_path)
+
+            # 5. Paginakader (brand pages.frame.static_elements), niet op
+            #    cover en achterblad.
+            frame = brand_page_elements(self.brand_config, "frame")
+            if frame:
+                offset = len(parts) - 1  # pagina's voor de content-PDF (cover, colofon)
+                stamped = apply_frame(
+                    output_path, frame, static_context(data, self.brand_config),
+                    skip_first=data.get("cover", {}).get("enabled", True),
+                    skip_last=content.backcover_added,
+                    brand_config=self.brand_config, fonts=self.fonts,
+                    elements_landscape=brand_page_elements(self.brand_config, "frame_landscape"),
+                    skip_pages={offset + i for i in content.divider_pages},
+                )
+                logger.info("Paginakader op %d pagina's", stamped)
+
+            # 6. PDF-bladwijzers (E12): hoofdstukken en bijlagen, niveau 1;
+            #    uit met toc.bookmarks: false.
+            if data.get("toc", {}).get("bookmarks", True):
+                self._add_bookmarks(output_path, content)
 
             # Report stats
             result = fitz.open(str(output_path))
@@ -3059,6 +4398,14 @@ class ReportGeneratorV2:
         schatting uit ``_build_toc_entries`` (die alle entries naar
         dezelfde pagina liet wijzen).
         """
+        renderer.header_label = data.get("header_label") or ""
+        renderer.static_context = static_context(data, self.brand_config)
+        colofon_page = renderer.colofon_as_content(data)
+        colofon_pages = 0
+        if colofon_page:
+            renderer.render_colofon_page(data)
+            # Colofon kan doorlopen op een vervolgblad; TOC komt erna (F16).
+            colofon_pages = len(renderer.doc)
         toc_cfg = data.get("toc", {})
         toc_enabled = toc_cfg.get("enabled", True)
         # Auto-nummering default aan — rapporten met eigen nummering in
@@ -3074,7 +4421,9 @@ class ReportGeneratorV2:
         # renderer.current_page_nr.
         toc_page_nr = renderer.current_page_nr
         if toc_enabled:
-            renderer.current_page_nr += 1  # reserveer 1 pagina voor TOC
+            # Reserveer toc_reserve pagina's; klopt dat niet met de werkelijke
+            # lengte, dan rendert ReportGeneratorV2 opnieuw (F13).
+            renderer.current_page_nr += renderer.toc_reserve
 
         # Document-brede oriëntatie: een top-level ``orientation`` (of
         # ``format`` met "landscape") maakt álle content-secties landscape,
@@ -3104,10 +4453,22 @@ class ReportGeneratorV2:
             nummer = appendix.get("label", f"Bijlage {appendix.get('number', 1)}")
             titel = appendix.get("title", "")
             renderer.render_bijlage_divider(nummer, titel)
+            divider_page = renderer.divider_log[-1][2]
+            first_log = len(renderer.heading_log)
 
             # Appendix content pages
             for section in appendix.get("content_sections", []):
                 renderer.render_section(section)
+            # F17: met toc.yaml appendix_target: divider wijst de inhoudsopgave-
+            # regel van een bijlage naar het scheidingsblad (begin van de
+            # bijlage). Default "content" = oud gedrag (pagina na het blad).
+            target = renderer.tpl.toc.get("appendix_target", "content")
+            for k in range(first_log, len(renderer.heading_log) if target == "divider" else 0):
+                if renderer.heading_log[k][0] == 1:
+                    entry = list(renderer.heading_log[k])
+                    entry[3] = divider_page
+                    renderer.heading_log[k] = tuple(entry)
+                    break
             if appendix.get("content_sections"):
                 renderer._add_page_number()
 
@@ -3120,12 +4481,20 @@ class ReportGeneratorV2:
             toc_entries = self._build_toc_entries_from_log(
                 renderer.heading_log, data
             )
+            # toc.max_depth (schema, default 3): 1 = alleen hoofdstukken (F12).
+            max_depth = int(toc_cfg.get("max_depth", 3) or 3)
+            toc_entries = [e for e in toc_entries if e[0] <= max_depth]
             toc_doc = renderer.render_toc_to_fresh_doc(
                 toc_entries, toc_page_nr
             )
             try:
                 # Voeg TOC pagina(s) in op positie 0 van de content-doc
-                renderer.doc.insert_pdf(toc_doc, start_at=0)
+                renderer.toc_pages_used = len(toc_doc)
+                toc_at = colofon_pages
+                renderer.doc.insert_pdf(toc_doc, start_at=toc_at)
+                renderer.divider_pages = [
+                    i + len(toc_doc) if i >= toc_at else i for i in renderer.divider_pages
+                ]
             finally:
                 toc_doc.close()
 
@@ -3191,6 +4560,33 @@ class ReportGeneratorV2:
         # Fallback: gebruik de oude heuristische builder als het log
         # leeg is (bijv. bij lege rapporten in tests).
         return self._build_toc_entries(data)
+
+    @staticmethod
+    def _add_bookmarks(output_path: Path, content: ContentRenderer) -> None:
+        """Zet bladwijzers (outline) voor hoofdstukken en bijlage-scheidingsbladen."""
+        doc = fitz.open(str(output_path))
+        n = len(doc)
+        marks: list[tuple[int, str]] = []
+        # Pagina van het blad zelf en de pagina erna (eerste bijlagehoofdstuk).
+        divider_pages = {page + k for _, _, page in content.divider_log for k in (0, 1)}
+        for entry in content.heading_log:
+            level, number, title, page = entry[:4]
+            # F18: een bijlage krijgt een bladwijzer op het scheidingsblad,
+            # niet ook nog een voor zijn eerste hoofdstuk.
+            if level == 1 and 1 <= page <= n and page not in divider_pages:
+                marks.append((page, f"{number}  {title}".strip()))
+        for label, titel, page in content.divider_log:
+            if 1 <= page <= n:
+                marks.append((page, f"{label}  {titel}".strip()))
+        if not marks:
+            doc.close()
+            return
+        marks.sort(key=lambda m: m[0])
+        doc.set_toc([[1, text, page] for page, text in marks])
+        tmp = output_path.with_suffix(".toc.tmp.pdf")
+        doc.save(str(tmp), garbage=3, deflate=True)
+        doc.close()
+        tmp.replace(output_path)
 
     @staticmethod
     def _merge_pdfs(input_paths: list[Path], output_path: Path) -> None:

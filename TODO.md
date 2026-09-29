@@ -1,6 +1,6 @@
 # TODO — openaec-reports
 
-**Laatst bijgewerkt:** 2026-07-10 (KBA-kicker uppercase) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
+**Laatst bijgewerkt:** 2026-09-28 (BVP E1-E9 klaar) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
 
 > Legenda: 🔴 Blocker | 🟡 Middel | 🟢 Nice-to-have
 > Voltooid werk is verplaatst naar `archief/2026-Q1-voltooid.md` (1 apr 2026). Deze file bevat alleen open items.
@@ -45,6 +45,30 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 ---
 
 ## 🟡 Middel
+
+### Bekende testfouten (norm 29-09-2026: 28 bekend, geen nieuwe)
+- 25 bestaande fouten van voor de BVP-branch (zie `git log`).
+- [ ] 3 in `tests/test_tenant_paths.py` (`TestFindTemplate::test_brand_subdir_in_package`, `TestReportGeneratorV2Tenant::test_no_tenant_no_env_backward_compat`, `TestTemplateSetWithTenantConfig::test_no_tenant_config_backward_compat`): leunen op privé 3BM-assets (`assets/brands|templates/3bm_cooperatie*`) die niet in git horen; faalden al op schone main. Lokaal slaagden ze alleen door untracked bestanden (29-09 verplaatst naar `D:\opruimactie\openaec-reports_untracked_2026-09-29\`). Voorstel: eigen test-fixture onder `tests/fixtures/` of `skipif` als de assets ontbreken.
+
+### BVP-uitbreidingen renderer_v2 (opdracht planner 28-09)
+- [x] E1 heading-nummerbreedte: titel schuift op bij breder nummer (`_heading_title_x`)
+- [x] E2 runs met labels in paragraph en bullet_list (`core/rich_text.py`); cellen volgen met E3
+- [x] E3 celobjecten (runs, bg_color, align, ...), cell_styles, row_styles group, tabel zonder kop
+- [x] Legacy `<b>`-cellen vet (fix/bold-cells, gemerged)
+- [x] E4 checklist-blok (1/2 kolommen, checked true/false/null)
+- [x] E7 level-1 zonder paginabreuk via `continue_on_page: true` (niet via page_break_before: false, dat sturen clients standaard mee), keep-with-next
+- [x] Review 29-09 (sonnet + Ollama) verwerkt; zie commit
+- [x] BVP-proef v2: F1 lange titel breekt af voor verwijzing/paginanummer (kop + TOC), F2 tabelkop + 2 rijen (keep_rows) bij elkaar
+- [x] BVP-proef v2: F3 keep-with-next (heading_2 + alinea/checklist voor tabel), F6 check-run (aankruisvak in tekst en tabelcel)
+- [x] Engine: paginakader (pages.frame/frame_landscape), achterblad uit static_elements, colofon als inhoudspagina, tabelopties (kop zonder vulling, kapitalen, letterspatiering, rules, padding), page_number.hidden, header_label.draw
+- [ ] Tenant kba (lokaal, niet in git): huisstijlronde E10/E11/F4/F5/F8 klaar; deploy naar /opt/openaec/reports-tenants/kba op woord Jochem (diff per bestand: D:\dev\shared\uitvoer\report-engine\260929_tenant-kba_wijzigingen\; kopie voor wijziging + sha's: D:\opruimactie\tenant_kba_2026-09-29\)
+- [x] G0 tenant-fonts + bold-cellen gemerged in feat/bvp-engine (akkoord Jochem 29-09); baseline tests/baseline/3bm opnieuw vastgelegd
+- [x] E5 definition_list
+- [x] E8 part/reference in kop en inhoudsopgave
+- [x] E9 statuslabel in kop (`header_label`; kba-brand heeft geen kopelementen)
+- [x] E6 SVG in image als vector (ook base64 image/svg+xml)
+- [ ] Rust-pariteit E1-E9 (`rust/`), nodig voordat Ypsilon lokaal rendert
+- [ ] `tenants/kba/stationery` lokaal leeg (kop/voet/colofon ontbreken lokaal); niet zelf vullen
 
 ### Rust renderer — feature parity met Python `renderer_v2.py`
 

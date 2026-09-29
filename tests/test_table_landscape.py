@@ -45,11 +45,13 @@ def _table_right_edge(doc: fitz.Document) -> tuple[float, float, bool]:
     'Verleend' zichtbaar binnen de pagina)."""
     for page in doc:
         words = page.get_text("words")
-        labels = {w[4] for w in words}
-        if "Verleend" in labels:
+        # Hoofdletterongevoelig: een tenant kan de tabelkop in kapitalen zetten
+        # (kba: th text-transform uppercase).
+        labels = {w[4].lower() for w in words}
+        if "verleend" in labels:
             right = max(w[2] for w in words)
             verleend_ok = any(
-                w[4] == "Verleend" and w[2] <= page.rect.width for w in words)
+                w[4].lower() == "verleend" and w[2] <= page.rect.width for w in words)
             return page.rect.width, right, verleend_ok
     raise AssertionError("geen tabelpagina met 'Verleend' gevonden")
 

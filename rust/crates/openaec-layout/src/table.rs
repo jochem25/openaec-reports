@@ -2,7 +2,7 @@
 
 use crate::draw::DrawList;
 use crate::flowable::{Flowable, LayoutContext, SplitResult};
-use crate::types::{Color, Padding, Pt, Size};
+use crate::types::{Alignment, Color, Padding, Pt, Size};
 
 /// Table cell content.
 #[derive(Debug, Clone)]
@@ -17,6 +17,9 @@ pub struct TableStyleConfig {
     pub header_background: Option<Color>,
     pub header_text_color: Color,
     pub grid_color: Color,
+    /// Rasterlijnen. Bij `Pt(0.0)` of kleiner worden GEEN cellijnen getekend
+    /// ("clean" rapportstijl); combineer met `header_rule` voor alleen een
+    /// lijn onder de koprij.
     pub grid_width: Pt,
     pub row_backgrounds: Vec<Option<Color>>,
     pub cell_padding: Padding,
@@ -24,6 +27,8 @@ pub struct TableStyleConfig {
     pub header_font_name: String,
     pub font_size: Pt,
     pub header_font_size: Pt,
+    /// Teken (ook zonder raster) een dunne lijn onder de koprij.
+    pub header_rule: bool,
 }
 
 impl Default for TableStyleConfig {
@@ -39,7 +44,48 @@ impl Default for TableStyleConfig {
             header_font_name: "LiberationSans-Bold".to_string(),
             font_size: Pt(9.0),
             header_font_size: Pt(9.0),
+            header_rule: false,
         }
+    }
+}
+
+/// Optionele stijl-afwijking per datarij (index = datarij-index, header telt
+/// niet mee). Gebruikt voor hoofdstuk- (vet), paragraaf- (vet-cursief),
+/// opmerking- (cursief) en subtotaalregels in de "clean" rapportstijl.
+#[derive(Debug, Clone, Default)]
+pub struct RowOverride {
+    /// Ander lettertype voor de hele rij (bv. "LiberationSans-Bold").
+    pub font_name: Option<String>,
+    /// Dunne lijn boven de rij (bv. hoofdstukregels in besteksopmaak).
+    pub top_rule: bool,
+    /// Dunne lijn onder de rij.
+    pub bottom_rule: bool,
+    /// Som-lijn boven de rij (subtotalen): zwart en dikker, loopt ~5 mm
+    /// rechts voorbij de tabel door, met een '+'-teken boven het uiteinde.
+    pub top_rule_sum: bool,
+}
+
+/// Geschatte breedte van één teken, uitgedrukt in em (× font_size).
+///
+/// Genoeg om terugloop op te baseren zonder de fonttabellen in te lezen. De
+/// waarden liggen dicht bij Liberation Sans / DejaVu Sans: kapitalen en
+/// cijfers zijn duidelijk breder dan de oude vlakke schatting van 0.5, smalle
+/// letters juist smaller. Zonder dit onderscheid liep een titel in kapitalen
+/// over de volgende kolom heen.
+fn char_em_width(c: char) -> f32 {
+    match c {
+        ' ' => 0.28,
+        'i' | 'j' | 'l' | 'I' | '.' | ',' | ':' | ';' | '\'' | '|' | '!' | '`' => 0.26,
+        'f' | 't' | 'r' | '(' | ')' | '[' | ']' | '-' | '/' | '\\' => 0.34,
+        'm' | 'w' => 0.79,
+        'M' | 'W' => 0.87,
+        c if c.is_ascii_uppercase() => 0.67,
+        c if c.is_ascii_digit() => 0.56,
+        c if c.is_ascii_lowercase() => 0.53,
+        // Accenten, €, ², ³ en overige tekens: net iets ruimer dan een
+        // gemiddelde kleine letter, zodat we eerder te vroeg dan te laat
+        // afbreken.
+        _ => 0.58,
     }
 }
 
@@ -62,6 +108,10 @@ pub struct Table {
     col_widths: Option<Vec<Pt>>,
     style: TableStyleConfig,
     repeat_header: bool,
+    /// Per-datarij stijl-afwijkingen (zelfde index als `rows`).
+    row_overrides: Vec<Option<RowOverride>>,
+    /// Uitlijning per kolom (default: links). Rechts voor getalkolommen.
+    col_alignments: Vec<Alignment>,
     // Computed after wrap()
     computed_col_widths: Vec<Pt>,
     row_layouts: Vec<RowLayout>,
@@ -76,10 +126,24 @@ impl Table {
             col_widths: None,
             style: TableStyleConfig::default(),
             repeat_header: true,
+            row_overrides: Vec::new(),
+            col_alignments: Vec::new(),
             computed_col_widths: Vec::new(),
             row_layouts: Vec::new(),
             wrapped_height: Pt::ZERO,
         }
+    }
+
+    /// Per-datarij stijl-afwijkingen; index loopt gelijk met de datarijen.
+    pub fn with_row_overrides(mut self, overrides: Vec<Option<RowOverride>>) -> Self {
+        self.row_overrides = overrides;
+        self
+    }
+
+    /// Uitlijning per kolom (links is de default); rechts voor getallen.
+    pub fn with_col_alignments(mut self, alignments: Vec<Alignment>) -> Self {
+        self.col_alignments = alignments;
+        self
     }
 
     pub fn with_col_widths(mut self, widths: Vec<Pt>) -> Self {
@@ -136,8 +200,12 @@ impl Table {
 
     /// Wrap cell text to fit within column width.
     ///
-    /// Uses approximate character width (0.5 × font_size for proportional fonts).
-    fn wrap_text(&self, text: &str, col_width: Pt, font_size: Pt) -> Vec<String> {
+    /// Meet de tekst per teken in plaats van met één vaste breedte. Een vlakke
+    /// 0.5 × font_size onderschat hoofdletters fors — in een proportioneel
+    /// font is een 'M' ruim twee keer zo breed als een 'i' — waardoor een
+    /// hoofdstuktitel in kapitalen niet omsloeg maar over de buurkolom heen
+    /// werd getekend.
+    fn wrap_text(&self, text: &str, col_width: Pt, font_size: Pt, bold: bool) -> Vec<String> {
         let usable_width = col_width.0
             - self.style.cell_padding.left.0
             - self.style.cell_padding.right.0;
@@ -146,28 +214,57 @@ impl Table {
             return vec![text.to_string()];
         }
 
-        // Approximate char width (proportional fonts ≈ 0.5 × font_size)
-        let char_width = font_size.0 * 0.5;
-        let max_chars = (usable_width / char_width).max(1.0) as usize;
+        // Vet is bij Liberation/DejaVu enkele procenten breder dan regulier.
+        let bold_factor = if bold { 1.06 } else { 1.0 };
+        let width_of = |s: &str| -> f32 {
+            s.chars().map(char_em_width).sum::<f32>() * font_size.0 * bold_factor
+        };
 
-        if text.len() <= max_chars {
+        if width_of(text) <= usable_width {
             return vec![text.to_string()];
         }
+
+        // Inspring van de eerste regel (bv. hiërarchie-indent) ook op de
+        // vervolgregels toepassen, zodat een omgeslagen omschrijving in de
+        // eigen kolom-inspringing blijft hangen.
+        let indent: String = text.chars().take_while(|c| *c == ' ').collect();
 
         let mut lines = Vec::new();
         let mut remaining = text;
 
         while !remaining.is_empty() {
-            if remaining.len() <= max_chars {
+            if width_of(remaining) <= usable_width {
                 lines.push(remaining.to_string());
                 break;
             }
 
-            // Find last space within max_chars
-            let split_at = remaining[..max_chars.min(remaining.len())]
+            // Loop mee tot de breedte vol is en onthoud de byte-index van dat
+            // teken. Op bytes slicen paniekt midden in een multi-byte teken
+            // ('×', 'm²', 'm¹'), dus altijd via char_indices.
+            let mut breedte = 0.0f32;
+            let mut hard_end = remaining.len();
+            for (idx, ch) in remaining.char_indices() {
+                breedte += char_em_width(ch) * font_size.0 * bold_factor;
+                if breedte > usable_width {
+                    // Minstens één teken per regel, anders loopt dit vast.
+                    hard_end = if idx == 0 {
+                        remaining
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| i)
+                            .unwrap_or(remaining.len())
+                    } else {
+                        idx
+                    };
+                    break;
+                }
+            }
+
+            // Terug naar de laatste spatie die nog binnen de breedte viel
+            let split_at = remaining[..hard_end]
                 .rfind(' ')
                 .map(|pos| pos + 1)
-                .unwrap_or(max_chars.min(remaining.len()));
+                .unwrap_or(hard_end);
 
             lines.push(remaining[..split_at].trim_end().to_string());
             remaining = remaining[split_at..].trim_start();
@@ -175,6 +272,11 @@ impl Table {
 
         if lines.is_empty() {
             lines.push(String::new());
+        }
+        if !indent.is_empty() {
+            for line in lines.iter_mut().skip(1) {
+                *line = format!("{indent}{line}");
+            }
         }
         lines
     }
@@ -184,6 +286,7 @@ impl Table {
         &self,
         cells: &[String],
         is_header: bool,
+        bold: bool,
     ) -> RowLayout {
         let font_size = if is_header {
             self.style.header_font_size
@@ -200,7 +303,7 @@ impl Table {
                     .get(col_idx)
                     .copied()
                     .unwrap_or(Pt(50.0));
-                self.wrap_text(text, col_width, font_size)
+                self.wrap_text(text, col_width, font_size, bold)
             })
             .collect();
 
@@ -261,7 +364,11 @@ impl Table {
         let font_name = if row.is_header {
             self.style.header_font_name.clone()
         } else {
-            self.style.font_name.clone()
+            self.row_overrides
+                .get(row_index)
+                .and_then(|o| o.as_ref())
+                .and_then(|o| o.font_name.clone())
+                .unwrap_or_else(|| self.style.font_name.clone())
         };
 
         draw_list.set_font(&font_name, font_size);
@@ -278,38 +385,99 @@ impl Table {
                 .copied()
                 .unwrap_or(Pt(50.0));
 
-            let text_x = Pt(cx.0 + self.style.cell_padding.left.0);
+            let align = self
+                .col_alignments
+                .get(col_idx)
+                .copied()
+                .unwrap_or(Alignment::Left);
 
             // Draw each wrapped line
             for (line_idx, line) in wrapped_lines.iter().enumerate() {
                 let line_y = Pt(base_text_y.0 + line_idx as f32 * leading);
-                draw_list.draw_text(text_x, line_y, line);
+                match align {
+                    Alignment::Right => {
+                        let right_x = Pt(cx.0 + col_width.0 - self.style.cell_padding.right.0);
+                        draw_list.draw_text_right(right_x, line_y, line);
+                    }
+                    _ => {
+                        let text_x = Pt(cx.0 + self.style.cell_padding.left.0);
+                        draw_list.draw_text(text_x, line_y, line);
+                    }
+                }
             }
 
             cx = Pt(cx.0 + col_width.0);
         }
 
-        // Draw grid lines
-        draw_list.set_stroke_color(self.style.grid_color);
-        draw_list.set_line_width(self.style.grid_width);
+        // Draw grid lines (clean stijl: grid_width <= 0 → geen cellijnen)
+        if self.style.grid_width.0 > 0.0 {
+            draw_list.set_stroke_color(self.style.grid_color);
+            draw_list.set_line_width(self.style.grid_width);
 
-        let total_width: f32 = self.computed_col_widths.iter().map(|w| w.0).sum();
-        // Bottom line
-        draw_list.draw_line(
-            x,
-            Pt(y.0 + row.height.0),
-            Pt(x.0 + total_width),
-            Pt(y.0 + row.height.0),
-        );
+            let total_width: f32 = self.computed_col_widths.iter().map(|w| w.0).sum();
+            // Bottom line
+            draw_list.draw_line(
+                x,
+                Pt(y.0 + row.height.0),
+                Pt(x.0 + total_width),
+                Pt(y.0 + row.height.0),
+            );
 
-        // Vertical lines
-        let mut vx = x;
-        for col_width in &self.computed_col_widths {
+            // Vertical lines
+            let mut vx = x;
+            for col_width in &self.computed_col_widths {
+                draw_list.draw_line(vx, y, vx, Pt(y.0 + row.height.0));
+                vx = Pt(vx.0 + col_width.0);
+            }
+            // Right edge
             draw_list.draw_line(vx, y, vx, Pt(y.0 + row.height.0));
-            vx = Pt(vx.0 + col_width.0);
+        } else if row.is_header && self.style.header_rule {
+            // Alleen een dunne lijn onder de koprij
+            draw_list.set_stroke_color(self.style.grid_color);
+            draw_list.set_line_width(Pt(0.75));
+            let total_width: f32 = self.computed_col_widths.iter().map(|w| w.0).sum();
+            draw_list.draw_line(
+                x,
+                Pt(y.0 + row.height.0),
+                Pt(x.0 + total_width),
+                Pt(y.0 + row.height.0),
+            );
         }
-        // Right edge
-        draw_list.draw_line(vx, y, vx, Pt(y.0 + row.height.0));
+
+        // Per-rij lijnen uit de RowOverride (clean stijl: hoofdstukregels)
+        if !row.is_header {
+            if let Some(ov) = self.row_overrides.get(row_index).and_then(|o| o.as_ref()) {
+                if ov.top_rule || ov.bottom_rule {
+                    draw_list.set_stroke_color(self.style.grid_color);
+                    draw_list.set_line_width(Pt(1.1));
+                    let total_width: f32 = self.computed_col_widths.iter().map(|w| w.0).sum();
+                    if ov.top_rule {
+                        draw_list.draw_line(x, y, Pt(x.0 + total_width), y);
+                    }
+                    if ov.bottom_rule {
+                        draw_list.draw_line(
+                            x,
+                            Pt(y.0 + row.height.0),
+                            Pt(x.0 + total_width),
+                            Pt(y.0 + row.height.0),
+                        );
+                    }
+                }
+                if ov.top_rule_sum {
+                    // Som-lijn (subtotaal): zwart, dikker, ~5 mm rechts
+                    // doorgetrokken met een '+' boven het uiteinde.
+                    let total_width: f32 = self.computed_col_widths.iter().map(|w| w.0).sum();
+                    let extend: Pt = crate::types::Mm(5.0).into();
+                    let end_x = Pt(x.0 + total_width + extend.0);
+                    draw_list.set_stroke_color(Color::rgb(26, 26, 26));
+                    draw_list.set_line_width(Pt(1.4));
+                    draw_list.draw_line(x, y, end_x, y);
+                    draw_list.set_font(&self.style.font_name, Pt(8.0));
+                    draw_list.set_fill_color(Color::rgb(26, 26, 26));
+                    draw_list.draw_text(Pt(end_x.0 - 5.0), Pt(y.0 - 2.0), "+");
+                }
+            }
+        }
     }
 }
 
@@ -319,16 +487,24 @@ impl Flowable for Table {
 
         self.row_layouts.clear();
 
-        // Header row
+        // Header row — koppen staan vet, dus ook breder meten.
         if !self.headers.is_empty() {
             self.row_layouts
-                .push(self.compute_row_layout(&self.headers.clone(), true));
+                .push(self.compute_row_layout(&self.headers.clone(), true, true));
         }
 
-        // Data rows
-        for row in self.rows.clone() {
+        // Data rows — een rij met een vet lettertype (hoofdstuktitels) is
+        // breder dan de reguliere schatting; die vlag gaat mee de terugloop in.
+        for (i, row) in self.rows.clone().into_iter().enumerate() {
+            let bold = self
+                .row_overrides
+                .get(i)
+                .and_then(|o| o.as_ref())
+                .and_then(|o| o.font_name.as_deref())
+                .map(|f| f.contains("Bold"))
+                .unwrap_or(false);
             self.row_layouts
-                .push(self.compute_row_layout(&row, false));
+                .push(self.compute_row_layout(&row, false, bold));
         }
 
         self.wrapped_height = Pt(self.row_layouts.iter().map(|r| r.height.0).sum());
@@ -337,11 +513,13 @@ impl Flowable for Table {
     }
 
     fn draw(&self, x: Pt, y: Pt, draw_list: &mut DrawList) {
-        // Top border
-        let total_width: f32 = self.computed_col_widths.iter().map(|w| w.0).sum();
-        draw_list.set_stroke_color(self.style.grid_color);
-        draw_list.set_line_width(self.style.grid_width);
-        draw_list.draw_line(x, y, Pt(x.0 + total_width), y);
+        // Top border (niet in clean stijl)
+        if self.style.grid_width.0 > 0.0 {
+            let total_width: f32 = self.computed_col_widths.iter().map(|w| w.0).sum();
+            draw_list.set_stroke_color(self.style.grid_color);
+            draw_list.set_line_width(self.style.grid_width);
+            draw_list.draw_line(x, y, Pt(x.0 + total_width), y);
+        }
 
         let mut cy = y;
         let mut data_row_idx = 0;
@@ -397,8 +575,23 @@ impl Flowable for Table {
             .map(|r| r.cells.clone())
             .collect();
 
+        // Verdeel de per-rij overrides over beide tafel-helften (zelfde
+        // datarij-indexering als de rows zelf).
+        let n_first = first_data_rows.len();
+        let (ov_first, ov_second): (Vec<Option<RowOverride>>, Vec<Option<RowOverride>>) =
+            if self.row_overrides.is_empty() {
+                (Vec::new(), Vec::new())
+            } else {
+                let mut padded = self.row_overrides.clone();
+                padded.resize(self.rows.len(), None);
+                let second = padded.split_off(n_first.min(padded.len()));
+                (padded, second)
+            };
+
         let mut first = Table::new(self.headers.clone(), first_data_rows)
-            .with_style(self.style.clone());
+            .with_style(self.style.clone())
+            .with_row_overrides(ov_first)
+            .with_col_alignments(self.col_alignments.clone());
         if let Some(ref widths) = self.col_widths {
             first = first.with_col_widths(widths.clone());
         }
@@ -411,7 +604,9 @@ impl Flowable for Table {
             },
             second_data_rows,
         )
-        .with_style(self.style.clone());
+        .with_style(self.style.clone())
+        .with_row_overrides(ov_second)
+        .with_col_alignments(self.col_alignments.clone());
         if let Some(ref widths) = self.col_widths {
             second = second.with_col_widths(widths.clone());
         }

@@ -75,7 +75,7 @@ logger = logging.getLogger(__name__)
 
 MM_TO_PT = 2.8346456693
 
-_KNOWN_TYPES = {"rect", "rounded_rect", "line", "polygon", "image", "text"}
+_KNOWN_TYPES = {"rect", "rounded_rect", "line", "polygon", "image", "text", "row"}
 _KNOWN_TRANSFORMS = {"upper", "lower", "title"}
 
 _TRANSFORM_FUNCS = {
@@ -328,6 +328,102 @@ def render_static_elements(
                     width=box_w_pt, height=box_h_pt,
                     preserveAspectRatio=(fit == "contain"), mask="auto",
                 )
+
+        elif el_type == "row":
+            # Regel als CSS flex space-between: items tussen x1 en x2, eerste
+            # links, laatste rechts, gelijke tussenruimte. Een item met
+            # "width" (mm) en zonder content is een vaste ruimte (bijv. het
+            # beeldmerk links in een kopregel). Leeg item = breedte 0.
+            from reportlab.pdfbase.pdfmetrics import stringWidth
+
+            x1, x2 = _mm(el.get("x1")) * MM_TO_PT, _mm(el.get("x2")) * MM_TO_PT
+            y = _mm(el.get("y"))
+            base_size = float(el.get("size", 10.0))
+            placed: list[tuple[str, str, float, str, float, float]] = []
+            for j, item in enumerate(el.get("items") or []):
+                if "content" not in item:
+                    placed.append(("", "", 0.0, "", 0.0, _mm(item.get("width")) * MM_TO_PT))
+                    continue
+                text = str(item.get("content", "")).format_map(safe_ctx)
+                tf = item.get("transform")
+                if tf is not None:
+                    if tf not in _KNOWN_TRANSFORMS:
+                        raise ValueError(
+                            f"static_elements: onbekende 'transform'-waarde '{tf}' in "
+                            f"{el_label}.items[{j}]."
+                        )
+                    text = _TRANSFORM_FUNCS[tf](text)
+                size = float(item.get("size", base_size))
+                font = item.get("font", el.get("font", "LiberationSans"))
+                try:
+                    stringWidth("x", font, size)
+                except KeyError:
+                    font = "LiberationSans"
+                cs = float(item.get("char_space", 0.0))
+                color = _resolve_color(
+                    {"color": item.get("color", el.get("color"))}, "color",
+                    block=f"{el_label}.items[{j}]",
+                ) if text else ""
+                width = stringWidth(text, font, size) + cs * max(len(text) - 1, 0) if text else 0.0
+                placed.append((text, font, size, color, cs, width))
+            if placed:
+                gaps = max(len(placed) - 1, 1)
+                gap = max(0.0, (x2 - x1 - sum(p[5] for p in placed)) / gaps)
+                cx = x1 if len(placed) > 1 else x2 - placed[0][5]
+                for text, font, size, color, cs, width in placed:
+                    if text:
+                        # saveState: letterspatiering (Tc) mag niet doorlekken
+                        # naar latere tekst op dezelfde pagina.
+                        c.saveState()
+                        y_bl = page_height_pt - (y * MM_TO_PT) - size * 0.8
+                        tx = c.beginText(cx, y_bl)
+                        tx.setFont(font, size)
+                        tx.setFillColor(HexColor(color))
+                        if cs:
+                            tx.setCharSpace(cs)
+                        tx.textOut(text)
+                        c.drawText(tx)
+                        c.restoreState()
+                    cx += width + gap
+
+        elif el_type == "text" and el.get("segments"):
+            # Tekstregel uit stukken met eigen font/kleur, achter elkaar gezet
+            # (bijv. "Bedrijfsnaam" semibold petrol + " - 2459 - versie 0.2"
+            # grijs). align: left (default) of right voor de hele regel.
+            from reportlab.pdfbase.pdfmetrics import stringWidth
+
+            x, y = _mm(el.get("x")), _mm(el.get("y"))
+            size = float(el.get("size", 10.0))
+            parts: list[tuple[str, str, float, str]] = []
+            for j, seg in enumerate(el["segments"]):
+                text = str(seg.get("content", "")).format_map(safe_ctx)
+                if not text:
+                    continue
+                seg_size = float(seg.get("size", size))
+                font = seg.get("font", el.get("font", "LiberationSans"))
+                try:
+                    stringWidth("x", font, seg_size)
+                except KeyError:
+                    font = "LiberationSans"
+                color = _resolve_color(
+                    {"color": seg.get("color", el.get("color"))}, "color",
+                    block=f"{el_label}.segments[{j}]",
+                )
+                parts.append((text, font, seg_size, color))
+            if not parts:
+                continue
+            total = sum(stringWidth(t, f, s) for t, f, s, _ in parts)
+            x_pt = x * MM_TO_PT
+            if el.get("align") == "right":
+                x_pt -= total
+            y_bl = page_height_pt - (y * MM_TO_PT) - size * 0.8
+            for text, font, seg_size, color in parts:
+                c.saveState()
+                c.setFillColor(HexColor(color))
+                c.setFont(font, seg_size)
+                c.drawString(x_pt, y_bl, text)
+                c.restoreState()
+                x_pt += stringWidth(text, font, seg_size)
 
         elif el_type == "text":
             x, y = _mm(el.get("x")), _mm(el.get("y"))
