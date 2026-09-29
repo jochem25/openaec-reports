@@ -4042,7 +4042,8 @@ class ContentRenderer:
             self.table({
                 "title": col.get("revision_title", "Versiebeheer"),
                 "headers": ["Versie", "Datum", "Door", "Wijziging"],
-                "column_widths": [12, 20, 14, 70],
+                # Datumkolom breed genoeg voor '28 september 2026' (F19).
+                "column_widths": [11, 27, 11, 67],
                 "rows": [
                     [h.get("version", ""),
                      format_date(h.get("date", ""), date_style(self._brand_config)),
@@ -4452,10 +4453,22 @@ class ReportGeneratorV2:
             nummer = appendix.get("label", f"Bijlage {appendix.get('number', 1)}")
             titel = appendix.get("title", "")
             renderer.render_bijlage_divider(nummer, titel)
+            divider_page = renderer.divider_log[-1][2]
+            first_log = len(renderer.heading_log)
 
             # Appendix content pages
             for section in appendix.get("content_sections", []):
                 renderer.render_section(section)
+            # F17: met toc.yaml appendix_target: divider wijst de inhoudsopgave-
+            # regel van een bijlage naar het scheidingsblad (begin van de
+            # bijlage). Default "content" = oud gedrag (pagina na het blad).
+            target = renderer.tpl.toc.get("appendix_target", "content")
+            for k in range(first_log, len(renderer.heading_log) if target == "divider" else 0):
+                if renderer.heading_log[k][0] == 1:
+                    entry = list(renderer.heading_log[k])
+                    entry[3] = divider_page
+                    renderer.heading_log[k] = tuple(entry)
+                    break
             if appendix.get("content_sections"):
                 renderer._add_page_number()
 
@@ -4554,9 +4567,13 @@ class ReportGeneratorV2:
         doc = fitz.open(str(output_path))
         n = len(doc)
         marks: list[tuple[int, str]] = []
+        # Pagina van het blad zelf en de pagina erna (eerste bijlagehoofdstuk).
+        divider_pages = {page + k for _, _, page in content.divider_log for k in (0, 1)}
         for entry in content.heading_log:
             level, number, title, page = entry[:4]
-            if level == 1 and 1 <= page <= n:
+            # F18: een bijlage krijgt een bladwijzer op het scheidingsblad,
+            # niet ook nog een voor zijn eerste hoofdstuk.
+            if level == 1 and 1 <= page <= n and page not in divider_pages:
                 marks.append((page, f"{number}  {title}".strip()))
         for label, titel, page in content.divider_log:
             if 1 <= page <= n:
