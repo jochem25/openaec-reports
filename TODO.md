@@ -21,7 +21,7 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 - [ ] **RV-3** `SegoeUI-Semibold.ttf` ontbreekt in `tenants/kba/fonts/` (alleen Bold/Italic/Semilight/Regular aanwezig) — ReportLab kan `font-weight:600` niet synthetiseren, dus meta-kopjes en kicker vallen terug op Bold of Regular. User moet het bestand aanleveren.
 - [ ] **RV-4** Bug: `openaec_foundation`-tenant crasht op content-secties — `KeyError: 'x'` in `heading_1()`, `core/renderer_v2.py:1317` (`n["x"]` ontbreekt). Content-secties gebruiken een afwijkend `content_styles`-schema dan waar `heading_1` vanuit gaat. Vastgelegd in `tests/baseline/FAILURES.md`, buiten scope fase 1-3.
 - [ ] **RV-5** Covervarianten b (full-bleed), c (venster) en d (45°-snede) zijn niet geïmplementeerd — alleen variant a. De generieke `static_elements`-primitieven (rect/rounded_rect/line/polygon/image/text, incl. `transform`) maken ze mogelijk; nog niet uitgewerkt in `tenants/kba/brand.base.yaml`.
-- [ ] **RV-6** `tenants/kba/` (nieuwe brand.yaml/brand.base.yaml/templates) is nog niet gedeployed naar `/opt/openaec/reports-tenants/kba/` op productie — `tenants/*` is gitignored, dit is een losse deploy-stap (geen deel van deze commit).
+- [x] **RV-6** `tenants/kba/` gedeployed naar `/opt/openaec/reports-tenants/kba/` op 29-09-2026 (huisstijlronde; backup ~/backups/reports-tenants-kba_20260929-1405.tar.gz) — `tenants/*` is gitignored, dit is een losse deploy-stap (geen deel van deze commit).
 
 ### Security — Hoog (SEC-H, 3 open)
 
@@ -45,6 +45,10 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 ---
 
 ## 🟡 Middel
+
+### Deploy
+- [ ] `deploy.sh`: `docker compose` moet via sudo (`/opt/openaec/.env` is root 600) en met `--build-arg GIT_COMMIT=$(git rev-parse --short HEAD)`, anders toont `/api/health` build `unknown` (29-09 handmatig gedaan).
+- [ ] Tenant-bestanden deployen gaat buiten git om; overweeg een tenant-sync-script met sha-controle.
 
 ### Bekende testfouten (norm 29-09-2026: 28 bekend, geen nieuwe)
 - 25 bestaande fouten van voor de BVP-branch (zie `git log`).
