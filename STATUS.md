@@ -1,6 +1,6 @@
 # STATUS — openaec-reports
 
-**Laatste update:** 2026-09-28 | **Productie:** [`report.open-aec.com`](https://report.open-aec.com)
+**Laatste update:** 2026-09-29 | **Productie:** [`report.open-aec.com`](https://report.open-aec.com)
 **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md) | **Git history:** `git log --oneline -30`
 
 ---
@@ -27,7 +27,7 @@
 | **Rust renderer feature parity** | parity gap vs Python `renderer_v2.py` | Heading-nummering + TOC counter state |
 | **Authentik Unified SSO migratie** | plan klaar, blokkeert op auth-fix | Fase 5 Reports migratie (dependencies.py refactor, JWT exit) |
 | **Desktop Tauri v2** | v0.2.0-alpha draft | D4 Authentik redirect URI, D5 OA logo, D6-D9 signing/updater/dialogs |
-| **BVP-uitbreidingen E1-E9** (renderer_v2) | E1-E9 klaar in renderer_v2 (branch `feat/bvp-engine`, niet gedeployed) | Rust-pariteit, review, merge + deploy op woord Jochem; spec `D:\KBA_projecten\000_Documentatie\00_bouwveiligheidsplan\sjabloon\UITBREIDING_REPORT_ENGINE.md` |
+| **BVP-uitbreidingen E1-E12, F1-F19** (renderer_v2) | Gemerged (PR #1, 124fdf7) en gedeployed 29-09 (build 124fdf7), tenant kba gesynct | Rust-pariteit; deploy.sh: sudo + GIT_COMMIT build-arg; spec `D:\KBA_projecten\000_Documentatie\00_bouwveiligheidsplan\sjabloon\UITBREIDING_REPORT_ENGINE.md` |
 | **Renderer brand-substitutie** | Fase 1-3 klaar | RV-3 (SegoeUI-Semibold.ttf), RV-5 (covervarianten b/c/d), RV-6 (KBA-tenant deploy naar server) — zie `TODO.md` |
 
 ---
