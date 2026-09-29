@@ -173,7 +173,28 @@
         },
         "disclaimer": {
           "type": "string",
-          "description": "Disclaimer tekst. Default uit template."
+          "description": "Disclaimer tekst. Default uit template. Bij colofon als inhoudspagina: blok onderaan."
+        },
+        "kicker": { "type": "string", "description": "Colofon als inhoudspagina: kleine kop boven de titel (default 'Colofon')" },
+        "title": { "type": "string", "description": "Colofon als inhoudspagina: titel (default report_type + project)" },
+        "subtitle": { "type": "string", "description": "Colofon als inhoudspagina: ondertitel (default documentgegevens)" },
+        "rows": {
+          "type": "array",
+          "description": "Colofon als inhoudspagina: eigen gegevensrijen (vervangt de standaardrijen)",
+          "items": {
+            "type": "object",
+            "required": ["label"],
+            "properties": {
+              "label": { "type": "string" },
+              "value": { "type": ["string", "number", "null"] },
+              "runs": { "$ref": "#/$defs/rich_runs" }
+            }
+          }
+        },
+        "content": {
+          "type": "array",
+          "description": "Colofon als inhoudspagina: extra blokken na versiebeheer",
+          "items": { "$ref": "#/$defs/content_block" }
         }
       }
     },

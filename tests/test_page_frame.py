@@ -102,3 +102,28 @@ def test_render_static_pages_one_page_per_spec():
         brand_config=brand(), fonts=FontManager(), block="test",
     )
     assert len(doc) == 2 and "Pagina 7 van 9" in doc[1].get_text()
+
+
+def test_row_char_space_does_not_leak(tmp_path):
+    """F10: letterspatiering in een row-item mag latere segmenten niet verbreden."""
+    elements = [
+        {"type": "row", "x1": 22, "x2": 188, "y": 20, "items": [
+            {"width": 12},
+            {"content": "LABEL", "font": "LiberationSans", "size": 6.5, "char_space": 2.0,
+             "color": "#A6342B"},
+            {"content": "Titel", "font": "LiberationSans", "size": 7.5, "color": "#6B7975"},
+        ]},
+        {"type": "text", "x": 22, "y": 280, "size": 7.5, "segments": [
+            {"content": "Kolthof Bouwadvies", "font": "LiberationSans-Bold", "color": "#0D6862"},
+            {"content": " - 2459", "font": "LiberationSans", "color": "#6B7975"},
+        ]},
+    ]
+    doc = render_static_pages([(elements, {})], brand_config=brand(), fonts=FontManager(),
+                              block="test")
+    spans = [
+        sp for b in doc[0].get_text("dict")["blocks"] for ln in b.get("lines", [])
+        for sp in ln["spans"] if sp["bbox"][1] > 700
+    ]
+    bold = next(sp for sp in spans if "Kolthof" in sp["text"])
+    rest = next(sp for sp in spans if "2459" in sp["text"])
+    assert rest["bbox"][0] >= bold["bbox"][2] - 0.5

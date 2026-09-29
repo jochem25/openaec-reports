@@ -372,6 +372,9 @@ def render_static_elements(
                 cx = x1 if len(placed) > 1 else x2 - placed[0][5]
                 for text, font, size, color, cs, width in placed:
                     if text:
+                        # saveState: letterspatiering (Tc) mag niet doorlekken
+                        # naar latere tekst op dezelfde pagina.
+                        c.saveState()
                         y_bl = page_height_pt - (y * MM_TO_PT) - size * 0.8
                         tx = c.beginText(cx, y_bl)
                         tx.setFont(font, size)
@@ -380,6 +383,7 @@ def render_static_elements(
                             tx.setCharSpace(cs)
                         tx.textOut(text)
                         c.drawText(tx)
+                        c.restoreState()
                     cx += width + gap
 
         elif el_type == "text" and el.get("segments"):

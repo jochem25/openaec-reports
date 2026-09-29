@@ -4003,8 +4003,9 @@ class ContentRenderer:
                        self._color(t, "color", "primary", "colofon.title"))
             self.y += t_size * 1.2
         self.y += t.get("spacing_after", 22.7) - t_size * 0.2
-        if col.get("subtitle"):
-            self.paragraph(str(col["subtitle"]))
+        subtitle = col.get("subtitle") or col.get("documentgegevens")
+        if subtitle:
+            self.paragraph(str(subtitle))
 
         rows = col.get("rows")
         if rows is None:
@@ -4017,7 +4018,7 @@ class ContentRenderer:
                 ("Opdrachtgever", col.get("opdrachtgever_naam", data.get("client", ""))),
                 ("Opgesteld door", author),
                 ("Fase", col.get("fase", "")),
-                ("Datum", data.get("date", "")),
+                ("Datum", col.get("datum") or data.get("date", "")),
                 ("Versie", data.get("version", "")),
                 ("Status", col.get("status_colofon", data.get("status", ""))),
                 ("Kenmerk", col.get("kenmerk", "")),
@@ -4040,7 +4041,37 @@ class ContentRenderer:
             })
         for block in col.get("content", []) or []:
             self._render_block(block)
+        if col.get("disclaimer"):
+            self._colofon_disclaimer(str(col["disclaimer"]), style.get("disclaimer", {}), x, max_w)
         self._add_page_number()
+
+    def _colofon_disclaimer(self, text: str, ds: dict, x: float, max_w: float) -> None:
+        """Disclaimer-blok: vlak met gekleurde balk links (huisstijl .disclaimer)."""
+        p = self.blocks.get("paragraph", {})
+        size = ds.get("size", 8.5)
+        lh = ds.get("line_height", size * 1.5)
+        pad_v = ds.get("padding_v", 14.2)  # 5 mm
+        pad_h = ds.get("padding_h", 17.0)  # 6 mm
+        bar = ds.get("bar_width", 3.4)  # 1.2 mm
+        color = self._color(ds, "color", "text_light", "colofon.disclaimer.text")
+        lines = self._layout_runs(
+            [{"text": text}], ds.get("font", p.get("font", "Inter-Regular")), size, color,
+            max_w - bar - 2 * pad_h,
+        )
+        box_h = len(lines) * lh + 2 * pad_v
+        self.y += ds.get("spacing_before", 11.3)
+        self._check_overflow(box_h)
+        self.page.draw_rect(
+            fitz.Rect(x, self.y, x + max_w, self.y + box_h), color=None,
+            fill=_hex_to_rgb(self._color(ds, "background", "surface", "colofon.disclaimer.bg")),
+        )
+        self.page.draw_rect(
+            fitz.Rect(x, self.y, x + bar, self.y + box_h), color=None,
+            fill=_hex_to_rgb(self._color(ds, "bar_color", "accent", "colofon.disclaimer.bar")),
+        )
+        for i, line in enumerate(lines):
+            self._draw_rich_line(line, x + bar + pad_h, self.y + pad_v + i * lh, size)
+        self.y += box_h
 
     def save(self, output_path: Path) -> None:
         """Save the assembled PyMuPDF document."""
@@ -4402,6 +4433,9 @@ class ReportGeneratorV2:
             toc_entries = self._build_toc_entries_from_log(
                 renderer.heading_log, data
             )
+            # toc.max_depth (schema, default 3): 1 = alleen hoofdstukken (F12).
+            max_depth = int(toc_cfg.get("max_depth", 3) or 3)
+            toc_entries = [e for e in toc_entries if e[0] <= max_depth]
             toc_doc = renderer.render_toc_to_fresh_doc(
                 toc_entries, toc_page_nr
             )
