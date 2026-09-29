@@ -1565,6 +1565,8 @@ class ContentRenderer:
         # Statuslabel rechtsboven op elke inhoudspagina ("CONCEPT"); gezet
         # door ReportGeneratorV2 vanuit data["header_label"]. Leeg = geen.
         self.header_label: str | dict = ""
+        # Stationery-sleutel van de huidige pagina ("standaard", "bijlagen").
+        self._page_template: str = ""
         self._section_counter: int = 0
         self._subsection_counter: int = 0
 
@@ -1618,6 +1620,7 @@ class ContentRenderer:
 
         self.page_count += 1
         self.page = self.doc[-1]
+        self._page_template = template_key
         self.page.clean_contents()  # Normaliseer content stream voor TextWriter
         self.fonts.insert_into_page(self.page)
         # Reset idempotency-flag: nieuwe pagina krijgt een nieuw nummer.
@@ -1652,7 +1655,11 @@ class ContentRenderer:
         piece = label_piece(self._label_text(kind, text), style)
         line = layout_pieces([piece], piece.width + 1.0)[0]
         p = self.blocks.get("paragraph", {})
-        right = cfg.get("right_x", p.get("x", 125.4) + p.get("max_width", 393.0))
+        if self._orientation == "landscape":
+            margin = self.blocks.get("table", {}).get("right_margin_landscape", 54.0)
+            right = cfg.get("right_x_landscape", A4_LANDSCAPE_WIDTH - margin)
+        else:
+            right = cfg.get("right_x", p.get("x", 125.4) + p.get("max_width", 393.0))
         top = self.tpl.standaard.get("margins", {}).get("top", 74.9)
         y_td = cfg.get("y_td", top / 2 - base * 0.47)
         self._draw_rich_line(line, right - line.width, y_td, base)
@@ -2231,7 +2238,8 @@ class ContentRenderer:
             label_lines = self._layout_runs(
                 [{"text": str(row.get("label", ""))}], fontname, size, label_color, label_w
             )
-            value_runs = runs_of(row) or [{"text": str(row.get("value", "") or "")}]
+            value = row.get("value")
+            value_runs = runs_of(row) or [{"text": "" if value is None else str(value)}]
             value_lines = self._layout_runs(value_runs, fontname, size, value_color, value_w)
             row_h = max(len(label_lines), len(value_lines)) * line_h
             self._check_overflow(row_h)
@@ -2329,7 +2337,8 @@ class ContentRenderer:
             if bold:
                 obj.setdefault("bold", True)
         runs = runs_of(obj)
-        text = plain_text(runs) if runs else str(obj.get("text", "") or "")
+        raw_text = obj.get("text")
+        text = plain_text(runs) if runs else ("" if raw_text is None else str(raw_text))
         color = obj.get("color") or obj.get("text_color")
         bg = obj.get("bg_color")
         align = obj.get("align", "left")
@@ -2433,7 +2442,9 @@ class ContentRenderer:
             num_cols = len(headers_raw)
         else:
             data_rows = [r for i, r in enumerate(rows_raw) if i not in group_rows]
-            num_cols = max((len(r) for r in data_rows), default=0)
+            num_cols = max(
+                (len(r) for r in data_rows), default=len(rows_raw[0]) if rows_raw else 0
+            )
         if num_cols == 0:
             return
 
@@ -2550,7 +2561,9 @@ class ContentRenderer:
             header_wrapped.append(lines if lines else [""])
         header_max_lines = max((len(lines) for lines in header_wrapped), default=1)
         header_h = max(header_max_lines * (h_fontsize * 1.35) + 8, 20.0)
-        has_header = bool(headers_raw)
+        # Zonder "headers"-sleutel geen kopregel; een expliciete lege lijst
+        # houdt het oude gedrag (lege kopband) zodat bestaande invoer gelijk blijft.
+        has_header = bool(headers_raw) or "headers" in block
         if not has_header:
             header_h = 0.0
 
@@ -2800,8 +2813,10 @@ class ContentRenderer:
         rect = fitz.Rect(x, self.y, x + target_w, self.y + target_h)
         try:
             if svg_doc is not None:
-                self.page.show_pdf_page(rect, svg_doc, 0)
-                svg_doc.close()
+                try:
+                    self.page.show_pdf_page(rect, svg_doc, 0)
+                finally:
+                    svg_doc.close()
             else:
                 self.page.insert_image(rect, filename=str(img_path))
         except (OSError, ValueError, RuntimeError) as e:
@@ -3338,16 +3353,24 @@ class ContentRenderer:
                 self._add_page_number()
             self._orientation = section_orientation
 
-        # Level 1 begint standaard op een nieuwe pagina; page_break_before:
-        # false zet dat uit (korte hoofdstukken). Een orientatiewissel forceert
-        # altijd een nieuwe pagina. Voor level 2+ is de default
-        # geen paginabreuk. Staat er nog geen pagina, dan altijd een nieuwe.
-        page_break = section.get("page_break_before")
-        if page_break is None:
-            page_break = level == 1
+        # Level 1 begint altijd op een nieuwe pagina (page_break_before: false
+        # verandert dat niet: clients sturen dat veld standaard mee).
+        # continue_on_page: true laat een level-1-hoofdstuk doorlopen op de
+        # huidige inhoudspagina (korte hoofdstukken). Een orientatiewissel,
+        # een ontbrekende pagina of een niet-inhoudspagina (bijlage-
+        # scheidingsblad) geeft altijd een nieuwe pagina.
+        continue_on_page = (
+            level == 1
+            and section.get("continue_on_page") is True
+            and not section.get("page_break_before", False)
+            and self._page_template == "standaard"
+        )
+        page_break = section.get("page_break_before", False) or (
+            level == 1 and not continue_on_page
+        )
         if page_break or orientation_changed or self.page is None:
             self._new_page()
-        elif level == 1:
+        elif continue_on_page:
             # Doorlopend hoofdstuk: witruimte boven de kop (bovenaan een
             # pagina is die er via de marge al). Past de kop met een paar
             # regels inhoud niet meer, dan toch een nieuwe pagina.
@@ -3394,12 +3417,13 @@ class ContentRenderer:
         block_type = block.get("type", "")
         if block_type == "paragraph":
             style = block.get("style", "")
+            heading_text = block.get("text") or plain_text(runs_of(block) or [])
             if style in ("Heading1", "heading_1"):
                 number = self._resolve_heading_number(1, block.get("number") or "")
-                self.heading_1(number, block.get("text", ""))
+                self.heading_1(number, heading_text)
             elif style in ("Heading2", "heading_2"):
                 number = self._resolve_heading_number(2, block.get("number") or "")
-                self.heading_2(number, block.get("text", ""))
+                self.heading_2(number, heading_text)
             elif runs_of(block) is not None:
                 self.rich_paragraph(block["runs"])
             else:

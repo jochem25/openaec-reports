@@ -189,15 +189,17 @@ class TestDisplayPageNr:
     reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
 )
 def test_level1_without_page_break(tmp_path, monkeypatch):
-    """E7: page_break_before false bij level 1 houdt het hoofdstuk op dezelfde pagina."""
+    """E7: continue_on_page houdt een level-1-hoofdstuk op dezelfde pagina.
+
+    page_break_before: false verandert niets: clients (docs/ai-instructions.md,
+    Tauri-template) sturen dat standaard mee.
+    """
     monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
     monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
     from openaec_reports.core.renderer_v2 import ReportGeneratorV2
 
-    def pages(second_break):
-        second = {"title": "Tweede", "content": [{"type": "paragraph", "text": "b"}]}
-        if second_break is not None:
-            second["page_break_before"] = second_break
+    def pages(**fields):
+        second = {"title": "Tweede", "content": [{"type": "paragraph", "text": "b"}], **fields}
         data = {
             "project": "E7", "template": "standaard",
             "colofon": {"enabled": False}, "toc": {"enabled": False},
@@ -207,14 +209,16 @@ def test_level1_without_page_break(tmp_path, monkeypatch):
                 second,
             ],
         }
-        out = tmp_path / f"e7_{second_break}.pdf"
+        out = tmp_path / f"e7_{len(list(tmp_path.iterdir()))}.pdf"
         ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
             data, TENANTS_DIR / "3bm" / "stationery", out
         )
         return len(fitz.open(str(out)))
 
-    assert pages(False) == pages(None) - 1
-    assert pages(True) == pages(None)
+    base = pages()
+    assert pages(continue_on_page=True) == base - 1
+    assert pages(page_break_before=False) == base
+    assert pages(continue_on_page=True, page_break_before=True) == base
 
 
 @pytest.mark.skipif(
@@ -343,3 +347,20 @@ def test_svg_image_is_placed_as_vector(tmp_path, monkeypatch):
     ]
     assert len(red_rects) >= 2
     assert "SVG kon niet worden geplaatst: kapot.svg" in page.get_text()
+
+
+class TestReviewFixes:
+    """Gemeten review-bevindingen 29-09 (tweede Claude)."""
+
+    @pytest.fixture
+    def fake(self):
+        fake = SimpleNamespace(
+            _brand_config=SimpleNamespace(colors={}),
+            _COLOR_ALIASES=ContentRenderer._COLOR_ALIASES,
+        )
+        fake._run_color = lambda value, default: ContentRenderer._run_color(fake, value, default)
+        return fake
+
+    def test_zero_cell_text_is_kept(self, fake):
+        sp = ContentRenderer._cell_spec(fake, {"text": 0, "bold": True}, 0, 0, {})
+        assert sp.text == "0"

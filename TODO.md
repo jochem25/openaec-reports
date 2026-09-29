@@ -52,7 +52,8 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 - [x] E3 celobjecten (runs, bg_color, align, ...), cell_styles, row_styles group, tabel zonder kop
 - [ ] Legacy `<b>`-cellen in tabellen renderen in kba/3bm als Regular (bold-font valt terug); fix wijzigt bestaande PDF's, besluit nodig
 - [x] E4 checklist-blok (1/2 kolommen, checked true/false/null)
-- [x] E7 level-1 zonder paginabreuk (`page_break_before: false`, keep-with-next)
+- [x] E7 level-1 zonder paginabreuk via `continue_on_page: true` (niet via page_break_before: false, dat sturen clients standaard mee), keep-with-next
+- [x] Review 29-09 (sonnet + Ollama) verwerkt; zie commit
 - [x] E5 definition_list
 - [x] E8 part/reference in kop en inhoudsopgave
 - [x] E9 statuslabel in kop (`header_label`; kba-brand heeft geen kopelementen)
