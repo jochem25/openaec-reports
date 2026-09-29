@@ -46,6 +46,10 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 
 ## 🟡 Middel
 
+### Bekende testfouten (norm 29-09-2026: 28 bekend, geen nieuwe)
+- 25 bestaande fouten van voor de BVP-branch (zie `git log`).
+- [ ] 3 in `tests/test_tenant_paths.py` (`TestFindTemplate::test_brand_subdir_in_package`, `TestReportGeneratorV2Tenant::test_no_tenant_no_env_backward_compat`, `TestTemplateSetWithTenantConfig::test_no_tenant_config_backward_compat`): leunen op privé 3BM-assets (`assets/brands|templates/3bm_cooperatie*`) die niet in git horen; faalden al op schone main. Lokaal slaagden ze alleen door untracked bestanden (29-09 verplaatst naar `D:\opruimactie\openaec-reports_untracked_2026-09-29\`). Voorstel: eigen test-fixture onder `tests/fixtures/` of `skipif` als de assets ontbreken.
+
 ### BVP-uitbreidingen renderer_v2 (opdracht planner 28-09)
 - [x] E1 heading-nummerbreedte: titel schuift op bij breder nummer (`_heading_title_x`)
 - [x] E2 runs met labels in paragraph en bullet_list (`core/rich_text.py`); cellen volgen met E3
