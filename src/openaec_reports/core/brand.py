@@ -117,6 +117,7 @@ class BrandConfig:
     footer: ZoneConfig = field(default_factory=ZoneConfig)
     logos: dict[str, str] = field(default_factory=dict)
     contact: dict[str, str] = field(default_factory=dict)
+    status: dict[str, str] = field(default_factory=dict)
     styles: dict[str, dict] = field(default_factory=dict)
     pages: dict[str, dict] = field(default_factory=dict)
     stationery: dict[str, StationeryPageConfig] = field(default_factory=dict)
@@ -310,6 +311,7 @@ class BrandLoader:
             footer=_parse_zone(data.get("footer")),
             logos=data.get("logos", {}),
             contact=data.get("contact", {}),
+            status=data.get("status", {}) or {},
             styles=data.get("styles", {}),
             pages=raw_pages,
             stationery=stationery,

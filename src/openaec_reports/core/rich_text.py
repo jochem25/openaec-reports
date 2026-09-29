@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-LABEL_KINDS = ("ntb", "bron", "ok", "nvt", "fout")
+LABEL_KINDS = ("ntb", "bron", "ok", "nvt", "fout", "bekend")
 
 _RE_WHITESPACE_SPLIT = re.compile(r"(\s+)")
 

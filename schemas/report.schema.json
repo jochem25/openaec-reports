@@ -755,9 +755,9 @@
         "text": { "type": "string" },
         "kind": {
           "type": "string",
-          "enum": ["ntb", "bron", "ok", "nvt", "fout"],
+          "enum": ["ntb", "bron", "ok", "nvt", "fout", "bekend"],
           "default": "ntb",
-          "description": "ntb (omlijnd, grijs), bron (gevuld, klein), ok, nvt, fout (rood)"
+          "description": "ntb (omlijnd, grijs), bron (gevuld, klein), ok, nvt, fout (rood), bekend (gevuld mint); kleuren uit brand.status als die er is"
         }
       }
     },
@@ -772,7 +772,7 @@
         "italic": { "type": "boolean", "default": false },
         "color": {
           "type": "string",
-          "description": "Semantische merkkleur (bijv. text_light, warning; aliassen grijs, rood, inkt, accent) of #RRGGBB"
+          "description": "Semantische merkkleur (bijv. text_light, warning; aliassen grijs, rood, inkt, accent), statustoken (bijv. score_4, status.ok) of #RRGGBB"
         },
         "label": { "$ref": "#/$defs/rich_label" },
         "check": {

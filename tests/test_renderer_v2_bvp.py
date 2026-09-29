@@ -496,3 +496,62 @@ def test_keep_with_next(tmp_path, monkeypatch):
                 assert "InleidingAlinea" in text, f"kop los bij spacer {height_mm} mm"
             if "InleidingAlinea" in text:
                 assert "KopA" in text, f"alinea los van tabel bij spacer {height_mm} mm"
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "3bm" / "stationery" / "standaard.pdf").exists(),
+    reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
+)
+def test_keep_chain_checklist_paragraph_table(tmp_path, monkeypatch):
+    """F3b: checklist -> alinea -> tabel blijft als geheel bij elkaar."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    for height_mm in range(170, 216, 3):
+        content = [
+            {"type": "spacer", "height_mm": height_mm},
+            {"type": "checklist", "items": [{"text": "AspectRegel RM 3.3", "checked": True}]},
+            {"type": "paragraph", "text": "RisicoTekst bij dit aspect."},
+            {"type": "table", "headers": ["KopA", "KopB"],
+             "rows": [["RijEen", "x"], ["RijTwee", "y"]]},
+        ]
+        data = {
+            "project": "F3b", "template": "standaard",
+            "colofon": {"enabled": False}, "toc": {"enabled": False},
+            "backcover": {"enabled": False},
+            "sections": [{"title": "T", "content": content}],
+        }
+        out = tmp_path / f"f3b_{height_mm}.pdf"
+        ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
+            data, TENANTS_DIR / "3bm" / "stationery", out
+        )
+        for page in fitz.open(str(out)):
+            text = page.get_text()
+            if "AspectRegel" in text:
+                assert "RisicoTekst" in text and "KopA" in text, f"keten los bij {height_mm} mm"
+
+
+class TestStatusTokens:
+    """Statustokens uit de huisstijl (brand.status) in runs, cellen en build-script."""
+
+    def test_run_color_status_token(self):
+        fake = SimpleNamespace(
+            _brand_config=SimpleNamespace(colors={}, status={"score_4": "#A6342B"}),
+            _COLOR_ALIASES=ContentRenderer._COLOR_ALIASES,
+        )
+        assert ContentRenderer._run_color(fake, "score_4", "#000000") == "#A6342B"
+        assert ContentRenderer._run_color(fake, "status.score_4", "#000000") == "#A6342B"
+
+    def test_build_status_resolves_and_rejects_unknown(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "build_tenant_brand", Path(__file__).parent.parent / "scripts" / "build_tenant_brand.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        src = {"kleuren": {"teal": "#0FA08D"}, "status": {"_comment": "x", "ok": "teal"}}
+        assert mod.build_status(src) == {"ok": "#0FA08D"}
+        with pytest.raises(ValueError):
+            mod.build_status({"kleuren": {}, "status": {"ok": "teal"}})

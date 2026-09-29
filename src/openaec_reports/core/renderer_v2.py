@@ -1635,6 +1635,8 @@ class ContentRenderer:
         # Tokens voor static_elements (achterblad); gezet door _render_content.
         self.static_context: dict[str, str] = {}
         self.backcover_added: bool = False
+        # Paginaindexen (in self.doc) van bijlage-scheidingsbladen: geen kader.
+        self.divider_pages: list[int] = []
         # Statuslabel rechtsboven op elke inhoudspagina ("CONCEPT"); gezet
         # door ReportGeneratorV2 vanuit data["header_label"]. Leeg = geen.
         self.header_label: str | dict = ""
@@ -2176,6 +2178,15 @@ class ContentRenderer:
         "ok": ("secondary", "primary", None),
         "nvt": ("separator", "text_light", "surface"),
         "fout": ("warning", "warning", None),
+        "bekend": (None, "primary", "accent"),
+    }
+    # Welke labelrollen een statuskleur (brand.status.<soort>) overnemen.
+    _LABEL_STATUS_ROLES: dict[str, tuple[str, ...]] = {
+        "ntb": ("border", "text"),
+        "bron": ("fill",),
+        "ok": ("border",),
+        "fout": ("border", "text"),
+        "bekend": ("fill",),
     }
     # Nederlandse kleurnamen in runs -> semantische merkkleur.
     _COLOR_ALIASES: dict[str, str] = {
@@ -2197,6 +2208,10 @@ class ContentRenderer:
         colors = getattr(self._brand_config, "colors", None) or {}
         if name in colors:
             return colors[name]
+        status = getattr(self._brand_config, "status", None) or {}
+        status_name = name.removeprefix("status.")
+        if status_name in status:
+            return status[status_name]
         logger.warning("Onbekende runkleur '%s'; basiskleur gebruikt", value)
         return default
 
@@ -2207,6 +2222,11 @@ class ContentRenderer:
             logger.warning("Onbekende labelsoort '%s'; 'ntb' gebruikt", kind)
             kind = "ntb"
         kind_cfg = {**cfg.get("kinds", {}).get(kind, {})}
+        status_color = (getattr(self._brand_config, "status", None) or {}).get(kind)
+        if status_color:
+            # Statuskleur van de huisstijl; expliciete template-waarden gaan voor.
+            for role in self._LABEL_STATUS_ROLES.get(kind, ()):
+                kind_cfg.setdefault(role, status_color)
         border_sem, text_sem, fill_sem = self._LABEL_SEMANTICS[kind]
         block = f"label.{kind}"
         border = (
@@ -2366,8 +2386,9 @@ class ContentRenderer:
           wat volgt (``blocks.heading_2.keep_with_next``, standaard 2 regels
           lopende tekst), of het begin van een tabel. Volgt er een alinea
           die zelf aan een tabel vastzit, dan die alinea plus dat begin.
-        - Alinea of checklist direct voor een tabel: het begin van de tabel
-          (titel, kop, eerste rijen), zodat de inleiding niet los staat.
+        - Alinea of checklist voor een tabel: het begin van de tabel (titel,
+          kop, eerste rijen), ook als er nog tot 3 alinea's/checklists tussen
+          staan (keten, F3b), zodat de inleiding niet los staat.
         Overige gevallen: 0 (ongewijzigd gedrag).
         """
         nxt = rest[0] if rest else None
@@ -2378,14 +2399,21 @@ class ContentRenderer:
             btype == "paragraph" and block.get("style") in ("Heading1", "heading_1",
                                                            "Heading2", "heading_2")
         )
-        if nxt.get("type") == "table" and (is_heading or btype in ("paragraph", "checklist")):
-            return self._table_keep_estimate(nxt)
-        after = rest[1] if len(rest) > 1 else None
-        if (
-            is_heading and after is not None and after.get("type") == "table"
-            and nxt.get("type") in ("paragraph", "checklist")
+        # Keten (F3b): tot 3 opeenvolgende alinea's/checklists die op een tabel
+        # uitkomen, blijven met het begin van die tabel bij dit blok.
+        chain_h, k = 0.0, 0
+        while (
+            k < len(rest) and k < 3
+            and rest[k].get("type") in ("paragraph", "checklist")
+            and not rest[k].get("style")
         ):
-            return self._block_height_estimate(nxt) + self._table_keep_estimate(after)
+            chain_h += self._block_height_estimate(rest[k])
+            k += 1
+        if (
+            k < len(rest) and rest[k].get("type") == "table"
+            and (is_heading or btype in ("paragraph", "checklist"))
+        ):
+            return chain_h + self._table_keep_estimate(rest[k])
         if is_heading:
             h2 = self.blocks.get("heading_2", {})
             p = self.blocks.get("paragraph", {})
@@ -2405,7 +2433,15 @@ class ContentRenderer:
                     _strip_html(block.get("text", "")), p["size"], p["max_width"],
                     fontname=p["font"],
                 ))
-            return p.get("spacing_before", 12.0) + n * lh
+            return p.get("spacing_before", 12.0) + n * lh + p.get("spacing_after", 12.0)
+        if block.get("type") == "checklist":
+            cs = self.blocks.get("checklist", {})
+            rows = -(-len(block.get("items", [])) // (2 if block.get("columns") == 2 else 1))
+            item_lh = cs.get("line_height", lh) + cs.get("row_spacing", 4.0)
+            return (
+                cs.get("spacing_before", p.get("spacing_before", 12.0)) + rows * item_lh
+                + cs.get("spacing_after", p.get("spacing_after", 12.0))
+            )
         return 2 * lh
 
     def _table_keep_estimate(self, block: dict) -> float:
@@ -2424,7 +2460,8 @@ class ContentRenderer:
         s = self.blocks.get("paragraph", {})
         spacing_before = s.get("spacing_before", 12.0)
         lines = self._layout_runs(runs, s["font"], s["size"], s["color"], s["max_width"])
-        self._check_overflow(spacing_before + len(lines) * s["line_height"] + self._keep_next)
+        keep = self._keep_next + s.get("spacing_after", 12.0) if self._keep_next else 0.0
+        self._check_overflow(spacing_before + len(lines) * s["line_height"] + keep)
         self.y += spacing_before
         for line in lines:
             self._draw_rich_line(line, s["x"], self.y, s["size"])
@@ -2436,7 +2473,8 @@ class ContentRenderer:
         spacing_before = s.get("spacing_before", 12.0)
         text = _strip_html(text)
         lines = self.fonts.wrap_text(text, s["size"], s["max_width"], fontname=s["font"])
-        self._check_overflow(spacing_before + len(lines) * s["line_height"] + self._keep_next)
+        keep = self._keep_next + s.get("spacing_after", 12.0) if self._keep_next else 0.0
+        self._check_overflow(spacing_before + len(lines) * s["line_height"] + keep)
         self.y += spacing_before
         for line in lines:
             self._text(s["x"], self.y, line, s["font"], s["size"], s["color"])
@@ -2566,7 +2604,10 @@ class ContentRenderer:
             row = laid_out[start:start + columns]
             row_h = max(len(lines) for _, lines in row) * line_h
             is_last = start + columns >= len(laid_out)
-            self._check_overflow(row_h + (self._keep_next if is_last else 0.0))
+            keep = 0.0
+            if is_last and self._keep_next:
+                keep = self._keep_next + cs.get("spacing_after", p.get("spacing_after", 12.0))
+            self._check_overflow(row_h + keep)
             for col, (checked, lines) in enumerate(row):
                 cx = x + col * (col_w + col_gap)
                 center = self.y + size * 0.8 - size * 0.33
@@ -3865,6 +3906,7 @@ class ContentRenderer:
     def render_bijlage_divider(self, nummer: str, titel: str) -> None:
         """Render appendix divider page."""
         self._new_page("bijlagen")
+        self.divider_pages.append(len(self.doc) - 1)
         # Number
         bijl_cfg = self.tpl.bijlage.get("dynamic_fields", {})
         nr_cfg = bijl_cfg.get("nummer", {})
@@ -4261,12 +4303,14 @@ class ReportGeneratorV2:
             #    cover en achterblad.
             frame = brand_page_elements(self.brand_config, "frame")
             if frame:
+                offset = len(parts) - 1  # pagina's voor de content-PDF (cover, colofon)
                 stamped = apply_frame(
                     output_path, frame, static_context(data, self.brand_config),
                     skip_first=data.get("cover", {}).get("enabled", True),
                     skip_last=content.backcover_added,
                     brand_config=self.brand_config, fonts=self.fonts,
                     elements_landscape=brand_page_elements(self.brand_config, "frame_landscape"),
+                    skip_pages={offset + i for i in content.divider_pages},
                 )
                 logger.info("Paginakader op %d pagina's", stamped)
 
@@ -4363,7 +4407,11 @@ class ReportGeneratorV2:
             )
             try:
                 # Voeg TOC pagina(s) in op positie 0 van de content-doc
-                renderer.doc.insert_pdf(toc_doc, start_at=1 if colofon_page else 0)
+                toc_at = 1 if colofon_page else 0
+                renderer.doc.insert_pdf(toc_doc, start_at=toc_at)
+                renderer.divider_pages = [
+                    i + len(toc_doc) if i >= toc_at else i for i in renderer.divider_pages
+                ]
             finally:
                 toc_doc.close()
 

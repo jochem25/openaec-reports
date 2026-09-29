@@ -11,6 +11,7 @@ in ``brand.yaml``:
 - ``pages.frame_landscape.static_elements``: hetzelfde voor liggende pagina's
   (maten in mm op 297 x 210). Ontbreekt het, dan krijgen liggende pagina's
   geen kader (het portretkader zou buiten beeld vallen).
+- Bijlage-scheidingsbladen krijgen geen kader (``skip_pages``).
 - ``pages.backcover.static_elements``: achterblad als er geen achterblad-PDF is.
 
 Tenants zonder deze sleutels merken niets (geen overlay, oud gedrag).
@@ -107,6 +108,7 @@ def apply_frame(
     brand_config: Any,
     fonts: Any,
     elements_landscape: list[dict] | None = None,
+    skip_pages: set[int] | None = None,
 ) -> int:
     """Stempel het paginakader op elke pagina van ``pdf_path`` (in place).
 
@@ -115,9 +117,10 @@ def apply_frame(
     """
     doc = fitz.open(str(pdf_path))
     n = len(doc)
+    skip = skip_pages or set()
     targets = [
         i for i in range(n)
-        if not (skip_first and i == 0) and not (skip_last and i == n - 1)
+        if not (skip_first and i == 0) and not (skip_last and i == n - 1) and i not in skip
     ]
     if not targets:
         doc.close()
