@@ -127,3 +127,12 @@ def test_row_char_space_does_not_leak(tmp_path):
     bold = next(sp for sp in spans if "Kolthof" in sp["text"])
     rest = next(sp for sp in spans if "2459" in sp["text"])
     assert rest["bbox"][0] >= bold["bbox"][2] - 0.5
+
+
+def test_format_date_long_nl():
+    from openaec_reports.core.page_frame import format_date
+
+    assert format_date("2026-09-28", "long_nl") == "28 september 2026"
+    assert format_date("2026-01-05", "long_nl") == "5 januari 2026"
+    assert format_date("2026-09-28", "") == "2026-09-28"
+    assert format_date("28-09-2026", "long_nl") == "28-09-2026"

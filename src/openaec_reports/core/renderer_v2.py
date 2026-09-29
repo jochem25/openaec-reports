@@ -39,6 +39,8 @@ from reportlab.pdfgen import canvas as rl_canvas
 from openaec_reports.core.page_frame import (
     apply_frame,
     brand_page_elements,
+    date_style,
+    format_date,
     render_static_pages,
     static_context,
 )
@@ -1054,7 +1056,7 @@ class CoverGenerator:
             "kicker": data.get("kicker", ""),
             "project": data.get("project", ""),
             "project_number": data.get("project_number", ""),
-            "date": data.get("date", ""),
+            "date": format_date(data.get("date", ""), date_style(self._brand_config)),
             "version": data.get("version", ""),
             "status": data.get("status", ""),
             "client": colofon_data.get("opdrachtgever_naam", data.get("client", "")),
@@ -1637,6 +1639,12 @@ class ContentRenderer:
         self.backcover_added: bool = False
         # Paginaindexen (in self.doc) van bijlage-scheidingsbladen: geen kader.
         self.divider_pages: list[int] = []
+        # Bijlage-scheidingsbladen voor de bladwijzers: (label, titel, pagina_nr).
+        self.divider_log: list[tuple[str, str, int]] = []
+        # Aantal voor de inhoudsopgave gereserveerde pagina's en het werkelijk
+        # gebruikte aantal (ReportGeneratorV2 rendert opnieuw bij verschil, F13).
+        self.toc_reserve: int = 1
+        self.toc_pages_used: int = 0
         # Statuslabel rechtsboven op elke inhoudspagina ("CONCEPT"); gezet
         # door ReportGeneratorV2 vanuit data["header_label"]. Leeg = geen.
         self.header_label: str | dict = ""
@@ -3907,6 +3915,7 @@ class ContentRenderer:
         """Render appendix divider page."""
         self._new_page("bijlagen")
         self.divider_pages.append(len(self.doc) - 1)
+        self.divider_log.append((nummer, titel, self.current_page_nr))
         # Number
         bijl_cfg = self.tpl.bijlage.get("dynamic_fields", {})
         nr_cfg = bijl_cfg.get("nummer", {})
@@ -4018,7 +4027,8 @@ class ContentRenderer:
                 ("Opdrachtgever", col.get("opdrachtgever_naam", data.get("client", ""))),
                 ("Opgesteld door", author),
                 ("Fase", col.get("fase", "")),
-                ("Datum", col.get("datum") or data.get("date", "")),
+                ("Datum", col.get("datum") or format_date(
+                    data.get("date", ""), date_style(self._brand_config))),
                 ("Versie", data.get("version", "")),
                 ("Status", col.get("status_colofon", data.get("status", ""))),
                 ("Kenmerk", col.get("kenmerk", "")),
@@ -4034,13 +4044,18 @@ class ContentRenderer:
                 "headers": ["Versie", "Datum", "Door", "Wijziging"],
                 "column_widths": [12, 20, 14, 70],
                 "rows": [
-                    [h.get("version", ""), h.get("date", ""), h.get("author", ""),
-                     h.get("description", "")]
+                    [h.get("version", ""),
+                     format_date(h.get("date", ""), date_style(self._brand_config)),
+                     h.get("author", ""), h.get("description", "")]
                     for h in history
                 ],
             })
+        # Geen hoofdstuknummering in het colofon (anders "0.1", F16).
+        auto_number = self._auto_number_enabled
+        self._auto_number_enabled = False
         for block in col.get("content", []) or []:
             self._render_block(block)
+        self._auto_number_enabled = auto_number
         if col.get("disclaimer"):
             self._colofon_disclaimer(str(col["disclaimer"]), style.get("disclaimer", {}), x, max_w)
         self._add_page_number()
@@ -4316,13 +4331,23 @@ class ReportGeneratorV2:
 
             # 3. Content (TOC + sections + appendices + backcover)
             logger.info("Generating content...")
-            content = ContentRenderer(
-                self.templates, self.fonts, stationery,
-                brand_config=self.brand_config,
-            )
-            # Adjust page numbering based on which parts are included
-            content.current_page_nr = len(parts) + 1
-            self._render_content(content, data)
+            toc_reserve = 1
+            for _attempt in range(3):
+                content = ContentRenderer(
+                    self.templates, self.fonts, stationery,
+                    brand_config=self.brand_config,
+                )
+                # Adjust page numbering based on which parts are included
+                content.current_page_nr = len(parts) + 1
+                content.toc_reserve = toc_reserve
+                self._render_content(content, data)
+                used = content.toc_pages_used
+                if not used or used == toc_reserve:
+                    break
+                # Inhoudsopgave langer/korter dan gereserveerd: paginanummers in
+                # de TOC en op de pagina's zouden verschuiven. Opnieuw (F13).
+                logger.info("Inhoudsopgave %d blz. i.p.v. %d: opnieuw renderen", used, toc_reserve)
+                toc_reserve = used
             content.save(tmp_content)
             parts.append(tmp_content)
 
@@ -4344,6 +4369,11 @@ class ReportGeneratorV2:
                     skip_pages={offset + i for i in content.divider_pages},
                 )
                 logger.info("Paginakader op %d pagina's", stamped)
+
+            # 6. PDF-bladwijzers (E12): hoofdstukken en bijlagen, niveau 1;
+            #    uit met toc.bookmarks: false.
+            if data.get("toc", {}).get("bookmarks", True):
+                self._add_bookmarks(output_path, content)
 
             # Report stats
             result = fitz.open(str(output_path))
@@ -4370,8 +4400,11 @@ class ReportGeneratorV2:
         renderer.header_label = data.get("header_label") or ""
         renderer.static_context = static_context(data, self.brand_config)
         colofon_page = renderer.colofon_as_content(data)
+        colofon_pages = 0
         if colofon_page:
             renderer.render_colofon_page(data)
+            # Colofon kan doorlopen op een vervolgblad; TOC komt erna (F16).
+            colofon_pages = len(renderer.doc)
         toc_cfg = data.get("toc", {})
         toc_enabled = toc_cfg.get("enabled", True)
         # Auto-nummering default aan — rapporten met eigen nummering in
@@ -4387,7 +4420,9 @@ class ReportGeneratorV2:
         # renderer.current_page_nr.
         toc_page_nr = renderer.current_page_nr
         if toc_enabled:
-            renderer.current_page_nr += 1  # reserveer 1 pagina voor TOC
+            # Reserveer toc_reserve pagina's; klopt dat niet met de werkelijke
+            # lengte, dan rendert ReportGeneratorV2 opnieuw (F13).
+            renderer.current_page_nr += renderer.toc_reserve
 
         # Document-brede oriëntatie: een top-level ``orientation`` (of
         # ``format`` met "landscape") maakt álle content-secties landscape,
@@ -4441,7 +4476,8 @@ class ReportGeneratorV2:
             )
             try:
                 # Voeg TOC pagina(s) in op positie 0 van de content-doc
-                toc_at = 1 if colofon_page else 0
+                renderer.toc_pages_used = len(toc_doc)
+                toc_at = colofon_pages
                 renderer.doc.insert_pdf(toc_doc, start_at=toc_at)
                 renderer.divider_pages = [
                     i + len(toc_doc) if i >= toc_at else i for i in renderer.divider_pages
@@ -4511,6 +4547,29 @@ class ReportGeneratorV2:
         # Fallback: gebruik de oude heuristische builder als het log
         # leeg is (bijv. bij lege rapporten in tests).
         return self._build_toc_entries(data)
+
+    @staticmethod
+    def _add_bookmarks(output_path: Path, content: ContentRenderer) -> None:
+        """Zet bladwijzers (outline) voor hoofdstukken en bijlage-scheidingsbladen."""
+        doc = fitz.open(str(output_path))
+        n = len(doc)
+        marks: list[tuple[int, str]] = []
+        for entry in content.heading_log:
+            level, number, title, page = entry[:4]
+            if level == 1 and 1 <= page <= n:
+                marks.append((page, f"{number}  {title}".strip()))
+        for label, titel, page in content.divider_log:
+            if 1 <= page <= n:
+                marks.append((page, f"{label}  {titel}".strip()))
+        if not marks:
+            doc.close()
+            return
+        marks.sort(key=lambda m: m[0])
+        doc.set_toc([[1, text, page] for page, text in marks])
+        tmp = output_path.with_suffix(".toc.tmp.pdf")
+        doc.save(str(tmp), garbage=3, deflate=True)
+        doc.close()
+        tmp.replace(output_path)
 
     @staticmethod
     def _merge_pdfs(input_paths: list[Path], output_path: Path) -> None:

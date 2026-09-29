@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,34 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas as rl_canvas
 
 logger = logging.getLogger(__name__)
+
+
+_MAANDEN = (
+    "januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus",
+    "september", "oktober", "november", "december",
+)
+_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def date_style(brand_config: Any) -> str:
+    """Datumweergave uit brand ``pages.format.date`` (bijv. ``long_nl``), of ''."""
+    pages = getattr(brand_config, "pages", None) or {}
+    return str((pages.get("format") or {}).get("date", "") or "")
+
+
+def format_date(value: Any, style: str) -> str:
+    """ISO-datum (JJJJ-MM-DD) in de weergave van de tenant; anders ongewijzigd.
+
+    ``long_nl``: "28 september 2026". Zonder stijl of bij een niet-ISO-waarde
+    komt de tekst ongewijzigd terug (bestaande rapporten blijven gelijk).
+    """
+    text = "" if value is None else str(value)
+    m = _ISO_DATE.match(text.strip())
+    if style == "long_nl" and m:
+        year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= month <= 12:
+            return f"{day} {_MAANDEN[month - 1]} {year}"
+    return text
 
 
 def brand_page_elements(brand_config: Any, page_type: str) -> list[dict] | None:
@@ -52,7 +81,7 @@ def static_context(data: dict, brand_config: Any) -> dict[str, str]:
         "kicker": str(data.get("kicker", "") or ""),
         "project": str(data.get("project", "") or ""),
         "project_number": str(data.get("project_number", "") or ""),
-        "date": str(data.get("date", "") or ""),
+        "date": format_date(data.get("date", ""), date_style(brand_config)),
         "version": str(data.get("version", "") or ""),
         "status": str(data.get("status", "") or ""),
         "client": str(colofon.get("opdrachtgever_naam", data.get("client", "")) or ""),

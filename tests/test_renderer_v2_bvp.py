@@ -555,3 +555,81 @@ class TestStatusTokens:
         assert mod.build_status(src) == {"ok": "#0FA08D"}
         with pytest.raises(ValueError):
             mod.build_status({"kleuren": {}, "status": {"ok": "teal"}})
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "3bm" / "stationery" / "standaard.pdf").exists(),
+    reason="private tenant 3bm niet aanwezig (tenants/ zit niet in git)",
+)
+def test_toc_page_numbers_with_multi_page_toc(tmp_path, monkeypatch):
+    """F13: bij een inhoudsopgave van meer dan 1 blz. kloppen de paginanummers; E12 bladwijzers."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    sections = [
+        {"title": f"Hoofdstuk{i:02d}", "content": [{"type": "paragraph", "text": "a"}]}
+        for i in range(1, 41)
+    ]
+    data = {
+        "project": "F13", "template": "standaard",
+        "colofon": {"enabled": False}, "backcover": {"enabled": False},
+        "sections": sections,
+    }
+    out = tmp_path / "f13.pdf"
+    ReportGeneratorV2(brand="3bm", tenant_slug="3bm").generate(
+        data, TENANTS_DIR / "3bm" / "stationery", out
+    )
+    doc = fitz.open(str(out))
+    toc_pages = [i for i, p in enumerate(doc) if p.get_text().count("Hoofdstuk") >= 5]
+    assert len(toc_pages) >= 1
+    first_content = max(toc_pages) + 1
+    assert first_content >= 3, "inhoudsopgave moet meer dan 1 blz. zijn voor deze test"
+    for title_nr in (1, 20, 40):
+        title = f"Hoofdstuk{title_nr:02d}"
+        actual = next(i + 1 for i in range(first_content, len(doc)) if title in doc[i].get_text())
+        # Gedrukt nummer in de inhoudsopgave: laatste woord op dezelfde regel.
+        printed = None
+        for ti in toc_pages:
+            words = doc[ti].get_text("words")
+            hit = next((w for w in words if w[4] == title), None)
+            if hit:
+                row = [w for w in words if abs(w[3] - hit[3]) < 2]
+                printed = int(max(row, key=lambda w: w[0])[4])
+        assert printed == actual, f"{title}: inhoudsopgave {printed}, werkelijk {actual}"
+        bookmarks = {t.split()[-1]: p for _, t, p in doc.get_toc()}
+        assert bookmarks[title] == actual
+
+
+@pytest.mark.skipif(
+    not (TENANTS_DIR / "kba" / "brand.yaml").exists(),
+    reason="private tenant kba niet aanwezig (tenants/ zit niet in git)",
+)
+def test_colofon_continuation_before_toc(tmp_path, monkeypatch):
+    """F16: colofon over 2 blz. staat voor de inhoudsopgave; geen '0.1' in colofon-content."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS_DIR))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS_DIR))
+    from openaec_reports.core.renderer_v2 import ReportGeneratorV2
+
+    items = [{"text": f"Onderdeel {i}", "checked": i % 2 == 0} for i in range(40)]
+    data = {
+        "project": "F16", "template": "standaard", "report_type": "Test",
+        "cover": {"image": str(TENANTS_DIR / "kba" / "logos" / "kba.png")},
+        "backcover": {"enabled": False},
+        "colofon": {
+            "enabled": True, "rows": [{"label": f"Veld {i}", "value": "x"} for i in range(9)],
+            "content": [{"type": "heading_2", "title": "Planstatus"},
+                        {"type": "checklist", "items": items}],
+            "disclaimer": "SlotDisclaimer tekst.",
+        },
+        "sections": [{"title": "Een", "content": [{"type": "paragraph", "text": "a"}]}],
+    }
+    out = tmp_path / "f16.pdf"
+    ReportGeneratorV2(brand="kba", tenant_slug="kba").generate(
+        data, TENANTS_DIR / "kba" / "stationery", out
+    )
+    texts = [p.get_text() for p in fitz.open(str(out))]
+    disclaimer_page = next(i for i, t in enumerate(texts) if "SlotDisclaimer" in t)
+    toc_page = next(i for i, t in enumerate(texts) if "Inhoud" in t[:400])
+    assert disclaimer_page < toc_page
+    assert not any("0.1" in t.split("Planstatus")[0][-10:] for t in texts if "Planstatus" in t)
