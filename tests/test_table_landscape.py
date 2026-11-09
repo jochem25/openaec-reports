@@ -6,17 +6,27 @@ waardoor kolommen per woord afbraken en de laatste kolom buiten beeld viel.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import fitz
+import pytest
 
 TENANTS = Path(__file__).resolve().parent.parent / "tenants"
 
+pytestmark = pytest.mark.skipif(
+    not (TENANTS / "kba" / "brand.yaml").exists(),
+    reason="Prive-tenant kba niet aanwezig; staat niet in git",
+)
+
+
+@pytest.fixture(autouse=True)
+def _tenants_env(monkeypatch):
+    """Tenants-root alleen binnen deze test zetten (lekte eerder naar andere tests)."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS))
+
 
 def _render(orientation: str, out: Path, level: str = "section") -> fitz.Document:
-    os.environ["OPENAEC_TENANTS_ROOT"] = str(TENANTS)
-    os.environ["OPENAEC_TENANTS_DIR"] = str(TENANTS)
     from openaec_reports.core.renderer_v2 import ReportGeneratorV2
 
     cols = ["Project", "Adres", "Concept", "Aangevraagd", "In behandeling",

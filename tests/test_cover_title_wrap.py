@@ -8,18 +8,28 @@ blijft) en de subtitel zakt mee. Een korte titel blijft één regel → identiek
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import fitz
+import pytest
 
 TENANTS = Path(__file__).resolve().parent.parent / "tenants"
+
+pytestmark = pytest.mark.skipif(
+    not (TENANTS / "kba" / "brand.yaml").exists(),
+    reason="Prive-tenant kba niet aanwezig; staat niet in git",
+)
+
+
+@pytest.fixture(autouse=True)
+def _tenants_env(monkeypatch):
+    """Tenants-root alleen binnen deze test zetten (lekte eerder naar andere tests)."""
+    monkeypatch.setenv("OPENAEC_TENANTS_ROOT", str(TENANTS))
+    monkeypatch.setenv("OPENAEC_TENANTS_DIR", str(TENANTS))
 LONG = "Herbestemming voormalig schoolgebouw met bijgebouwen"
 
 
 def _cover(report_type: str, tmp: Path) -> fitz.Page:
-    os.environ["OPENAEC_TENANTS_ROOT"] = str(TENANTS)
-    os.environ["OPENAEC_TENANTS_DIR"] = str(TENANTS)
     from openaec_reports.core.renderer_v2 import ReportGeneratorV2
 
     data = {

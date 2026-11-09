@@ -21,6 +21,10 @@ SKIP = pytest.mark.skipif(
 class TestApiTemplateEndpoint:
     """Test het /api/generate/template endpoint."""
 
+    @pytest.mark.skipif(
+        not (TENANTS_DIR / "customer" / "templates" / "bic_factuur.yaml").exists(),
+        reason="Prive-tenant 'customer' (bic_factuur) niet aanwezig; staat niet in git",
+    )
     def test_generate_customer_bic(self, authenticated_client) -> None:
         """Genereer Customer BIC factuur via API."""
         with TEST_JSON.open("r", encoding="utf-8") as f:

@@ -7,8 +7,8 @@
 
 ## Huidige staat
 
-- **Tests:** 1451 collected (1331 passed, 92 skipped, 28 bekende failures, zie TODO CI-1) — Python backend, gemeten 09-11-2026
-- **CI (main):** ruff groen sinds 09-11-2026 (32 meldingen opgeschoond, O-2026-11-09-06); pytest-stap: zie TODO CI-1
+- **Tests:** in git 1326 collected: schone checkout (= CI) 1217 passed / 109 skipped / 0 failed; met prive-tenants 1233 passed / 93 skipped / 0 failed. Plus 125 gitignored prive-tests (3 failures, TODO CI-3). Gemeten 09-11-2026, Python 3.12.14, .venv
+- **CI (main):** ruff + pytest groen sinds 09-11-2026 (O-2026-11-09-06 ruff, O-2026-11-09-08 tests; uitleg per test in commitbericht)
 - **Rust tests:** 197 totaal (9 phases compleet, deploy van Rust server wacht op subdomein `report-rs.open-aec.com`)
 - **Productie:** multi-tenant via bind-mount `/opt/openaec/reports-tenants/`, SSO-only via Authentik
 - **Engines live:** V1 (`/api/generate`), V2 (`/api/generate/v2`), V3 (`/api/generate/template`)

@@ -19,6 +19,27 @@ import pytest
 from openaec_reports.core.renderer_v2 import FontManager, TemplateSet
 from openaec_reports.core.tenant import _PACKAGE_ASSETS, TenantConfig
 
+PKG_BRAND = "pkg_brand"
+
+
+@pytest.fixture()
+def package_brand_assets(tmp_path, monkeypatch):
+    """Nep-package-assets met een per-brand template-subdir.
+
+    De echte package-subdir (``assets/templates/3bm_cooperatie``) is in de
+    tenant-purge (a2edfe2) uit git gehaald; deze fixture bouwt het
+    backward-compat-scenario na zonder prive-tenantdata.
+    """
+    from openaec_reports.core import renderer_v2, tenant
+
+    assets = tmp_path / "pkg_assets"
+    brand_dir = assets / "templates" / PKG_BRAND
+    brand_dir.mkdir(parents=True)
+    (brand_dir / "cover.yaml").write_text("name: cover\n", encoding="utf-8")
+    monkeypatch.setattr(tenant, "_PACKAGE_ASSETS", assets)
+    monkeypatch.setattr(renderer_v2, "TEMPLATES_DIR", assets / "templates")
+    return assets
+
 # ============================================================
 # TenantConfig.find_template — cascade
 # ============================================================
@@ -49,18 +70,17 @@ class TestFindTemplate:
         assert resolved is not None
         assert resolved == _PACKAGE_ASSETS / "templates" / "blank.yaml"
 
-    def test_brand_subdir_in_package(self, tmp_path):
+    def test_brand_subdir_in_package(self, tmp_path, package_brand_assets):
         """Bij brand-argument zoekt cascade ook ``<package>/templates/<brand>/<file>``."""
         # Geen tenant-templates; zoek in package per-brand subdir.
-        tdir = tmp_path / "templates"
-        tdir.mkdir()
+        tenant_dir = tmp_path / "tenant"
+        (tenant_dir / "templates").mkdir(parents=True)
 
-        tc = TenantConfig(tmp_path)
-        # 3bm_cooperatie bestaat als subdir in de package met cover.yaml
-        resolved = tc.find_template("cover.yaml", brand="3bm_cooperatie")
+        tc = TenantConfig(tenant_dir)
+        resolved = tc.find_template("cover.yaml", brand=PKG_BRAND)
 
         assert resolved is not None
-        assert resolved.parent.name == "3bm_cooperatie"
+        assert resolved.parent.name == PKG_BRAND
         assert resolved.name == "cover.yaml"
 
     def test_missing_template_returns_none(self, tmp_path):
@@ -176,11 +196,10 @@ class TestTemplateSetWithTenantConfig:
         assert isinstance(ts.cover, dict)
         assert isinstance(ts.standaard, dict)
 
-    def test_no_tenant_config_backward_compat(self):
+    def test_no_tenant_config_backward_compat(self, package_brand_assets):
         """Zonder ``tenant_config`` blijft oud gedrag: package-per-brand-subdir."""
-        # 3bm_cooperatie bestaat als subdir in package
-        ts = TemplateSet(brand="3bm_cooperatie")
-        assert ts.dir == _PACKAGE_ASSETS / "templates" / "3bm_cooperatie"
+        ts = TemplateSet(brand=PKG_BRAND)
+        assert ts.dir == package_brand_assets / "templates" / PKG_BRAND
         assert ts.dir.exists()
 
     def test_no_tenant_config_raises_on_missing_brand(self):
@@ -289,7 +308,7 @@ class TestReportGeneratorV2Tenant:
 
         assert gen.templates.cover["dynamic_fields"]["rapport_type"]["size"] == 77
 
-    def test_no_tenant_no_env_backward_compat(self, monkeypatch):
+    def test_no_tenant_no_env_backward_compat(self, monkeypatch, package_brand_assets):
         """Zonder tenant-info en een bestaande package-brand: backward compat werkt."""
         monkeypatch.delenv("OPENAEC_TENANT_DIR", raising=False)
         monkeypatch.delenv("OPENAEC_TENANTS_ROOT", raising=False)
@@ -300,9 +319,8 @@ class TestReportGeneratorV2Tenant:
 
         from openaec_reports.core.renderer_v2 import ReportGeneratorV2
 
-        # 3bm_cooperatie bestaat als subdir in package
-        gen = ReportGeneratorV2(brand="3bm_cooperatie")
-        assert gen.templates.dir.name == "3bm_cooperatie"
+        gen = ReportGeneratorV2(brand=PKG_BRAND)
+        assert gen.templates.dir.name == PKG_BRAND
 
 
 # ============================================================

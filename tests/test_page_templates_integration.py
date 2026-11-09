@@ -1,5 +1,6 @@
 """Tests voor page_templates.py — stationery-first callbacks en text zones."""
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from openaec_reports.core.brand import BrandConfig, BrandLoader
@@ -9,6 +10,8 @@ from openaec_reports.core.page_templates import (
     _resolve_binding,
     create_page_templates,
 )
+
+TENANTS =Path(__file__).resolve().parent.parent / "tenants"
 
 
 def _make_config(**kwargs) -> DocumentConfig:
@@ -45,13 +48,16 @@ class TestCreatePageTemplates:
     def test_content_frame_from_brand(self):
         """Content frame dimensies komen uit brand stationery config."""
         config = _make_config()
-        brand = BrandLoader().load("default")
+        # Publieke default-tenant (tenants/default), los van env-instellingen.
+        brand = BrandLoader(tenants_root=TENANTS).load("default")
         templates = create_page_templates(config, brand=brand)
 
         content = templates[2]  # content template
         frame = content.frames[0]
-        # default heeft content_frame.x_pt=90.0
-        assert abs(frame._x1 - 90.0) < 1.0
+        cf = brand.stationery["content"].content_frame
+        assert cf, "default brand hoort een content_frame te hebben"
+        assert abs(frame._x1 - cf["x_pt"]) < 1.0
+        assert abs(frame._width - cf["width_pt"]) < 1.0
 
 
 class TestResolveBinding:

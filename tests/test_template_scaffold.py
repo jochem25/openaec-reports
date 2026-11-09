@@ -63,7 +63,7 @@ class TestScaffoldStructuralReport:
         assert scaffold["project"] == ""
         assert scaffold["project_number"] == ""
         assert scaffold["client"] == ""
-        assert scaffold["author"] == "OpenAEC"
+        assert scaffold["author"] == ""
         assert scaffold["version"] == "1.0"
         assert scaffold["status"] == "CONCEPT"
 

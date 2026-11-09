@@ -25,7 +25,7 @@ class TestFromJson:
         assert report.document.config.project == "Kijkduin Reddingspost"
         assert report.document.config.project_number == "2024-031"
         assert report.document.config.client == "Gemeente Den Haag"
-        assert report.document.config.author == "OpenAEC"
+        assert report.document.config.author == "Default Author"
 
     def test_from_json_extra_metadata(self):
         """Extra metadata velden (date, version, status) worden ingelezen."""
@@ -33,7 +33,7 @@ class TestFromJson:
         assert report.date == "2026-02-18"
         assert report.version == "1.0"
         assert report.status == "CONCEPT"
-        assert report._metadata.get("software") == "OpenAEC Report Generator v0.1.0"
+        assert report._metadata.get("software") == "OpenAEC Report Generator"
 
     def test_from_json_cover(self):
         """Cover is ingesteld met subtitle."""

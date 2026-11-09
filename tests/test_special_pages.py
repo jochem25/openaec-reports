@@ -32,9 +32,26 @@ def _make_config(**kwargs) -> DocumentConfig:
     return DocumentConfig(format=A4, **defaults)
 
 
+TENANTS = Path(__file__).resolve().parent.parent / "tenants"
+
+
 def _make_brand() -> BrandConfig:
-    """Laad de OpenAEC brand voor tests."""
-    return BrandLoader().load("default")
+    """Laad de publieke default-tenant brand (``tenants/default``), zoals productie.
+
+    Expliciete tenants_root: resultaat mag niet afhangen van een
+    ``OPENAEC_TENANTS_ROOT`` die een andere test heeft laten staan.
+    """
+    return BrandLoader(tenants_root=TENANTS).load("default")
+
+
+def _assert_state_balanced(canvas) -> None:
+    """Canvas-state is gezet en netjes hersteld.
+
+    Het aantal saveState-aanroepen hangt af van de brand (een SVG-logo nest
+    eigen state); wat telt is dat elke saveState een restoreState heeft.
+    """
+    assert canvas.saveState.call_count >= 1
+    assert canvas.saveState.call_count == canvas.restoreState.call_count
 
 
 def _make_canvas():
@@ -80,8 +97,7 @@ class TestDrawCoverPage:
 
         draw_cover_page(canvas, None, config, brand)
 
-        canvas.saveState.assert_called_once()
-        canvas.restoreState.assert_called_once()
+        _assert_state_balanced(canvas)
 
     def test_draws_purple_rectangle(self):
         canvas = _make_canvas()
@@ -131,7 +147,7 @@ class TestDrawCoverPage:
         draw_cover_page(canvas, None, config, brand)
 
         # Mag niet crashen
-        canvas.saveState.assert_called_once()
+        _assert_state_balanced(canvas)
 
     def test_no_crash_with_missing_logo(self, tmp_path):
         canvas = _make_canvas()
@@ -144,7 +160,7 @@ class TestDrawCoverPage:
 
         # Mag niet crashen ook zonder logo
         draw_cover_page(canvas, None, config, brand)
-        canvas.saveState.assert_called_once()
+        _assert_state_balanced(canvas)
 
 
 class TestDrawColofonPage:
@@ -155,8 +171,7 @@ class TestDrawColofonPage:
 
         draw_colofon_page(canvas, None, config, brand)
 
-        canvas.saveState.assert_called_once()
-        canvas.restoreState.assert_called_once()
+        _assert_state_balanced(canvas)
 
     def test_draws_report_type(self):
         canvas = _make_canvas()
@@ -193,8 +208,7 @@ class TestDrawColofonPage:
 
         draw_colofon_page(canvas, None, config, brand, data)
 
-        canvas.saveState.assert_called_once()
-        canvas.restoreState.assert_called_once()
+        _assert_state_balanced(canvas)
 
     def test_draws_footer_rect(self):
         canvas = _make_canvas()
@@ -234,7 +248,7 @@ class TestDrawColofonPage:
 
         draw_colofon_page(canvas, None, config, brand, colofon_data=None)
 
-        canvas.saveState.assert_called_once()
+        _assert_state_balanced(canvas)
 
 
 class TestDrawBackcoverPage:
@@ -245,8 +259,7 @@ class TestDrawBackcoverPage:
 
         draw_backcover_page(canvas, None, config, brand)
 
-        canvas.saveState.assert_called_once()
-        canvas.restoreState.assert_called_once()
+        _assert_state_balanced(canvas)
 
     def test_draws_turquoise_background(self):
         canvas = _make_canvas()
@@ -274,6 +287,8 @@ class TestDrawBackcoverPage:
         canvas = _make_canvas()
         config = _make_config()
         brand = _make_brand()
+        # Publieke default-tenant heeft (sinds de tenant-purge) leeg contact.
+        brand.contact = {"name": "OpenAEC", "address": "Zwijndrecht", "website": ""}
 
         draw_backcover_page(canvas, None, config, brand)
 
@@ -293,8 +308,7 @@ class TestDrawAppendixDividerPage:
 
         draw_appendix_divider_page(canvas, None, config, brand)
 
-        canvas.saveState.assert_called_once()
-        canvas.restoreState.assert_called_once()
+        _assert_state_balanced(canvas)
 
     def test_draws_turquoise_background(self):
         canvas = _make_canvas()
@@ -364,6 +378,11 @@ class TestDrawAppendixDividerPage:
         canvas = _make_canvas()
         config = _make_config()
         brand = _make_brand()
+        # Publieke default-tenant heeft (sinds de tenant-purge) geen tagline.
+        brand.pages["appendix_divider"] = {
+            **brand.pages.get("appendix_divider", {}),
+            "tagline": "Projecten die inspireren",
+        }
 
         draw_appendix_divider_page(canvas, None, config, brand)
 
@@ -380,7 +399,7 @@ class TestDrawAppendixDividerPage:
 
         draw_appendix_divider_page(canvas, None, config, brand)
 
-        canvas.saveState.assert_called_once()
+        _assert_state_balanced(canvas)
 
 
 class TestCoverFromBrandConfig:
@@ -440,7 +459,7 @@ class TestCoverFromBrandConfig:
 
         # Mag niet crashen
         draw_cover_page(canvas, None, config, brand)
-        canvas.saveState.assert_called_once()
+        _assert_state_balanced(canvas)
 
     def test_cover_uses_brand_ontdek_text(self):
         """Cover ontdek tekst komt uit brand.pages.cover."""
@@ -512,7 +531,7 @@ class TestBackcoverFromBrandConfig:
         config = _make_config()
 
         draw_backcover_page(canvas, None, config, brand)
-        canvas.saveState.assert_called_once()
+        _assert_state_balanced(canvas)
 
     def test_backcover_uses_brand_contact_position(self):
         """Backcover contact posities komen uit brand.pages.backcover."""

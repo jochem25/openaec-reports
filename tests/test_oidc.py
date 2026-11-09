@@ -320,14 +320,20 @@ class TestMeEndpointWithAuthentik:
         r = client.get("/api/auth/me")
         assert r.status_code == 401
 
-    def test_service_token_returns_501(self):
-        """Bearer ak_* tokens worden gemarkeerd als TODO (fase 6)."""
-        from openaec_reports.api import app
+    def test_invalid_service_token_returns_401(self, monkeypatch):
+        """Bearer-token dat Authentik afwijst -> 401 (fase 6 is geimplementeerd).
 
+        De Authentik-validatie wordt gemockt: de test mag geen netwerkcall doen.
+        """
+        from openaec_reports.api import app
+        from openaec_reports.auth import dependencies
+
+        monkeypatch.setattr(
+            dependencies, "_cached_authentik_user", lambda *a, **k: None
+        )
         client = TestClient(app)
         r = client.get(
             "/api/auth/me",
             headers={"Authorization": "Bearer ak_dummy_service_token_123"},
         )
-        assert r.status_code == 501
-        assert "fase 6" in r.json()["detail"].lower()
+        assert r.status_code == 401

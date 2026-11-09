@@ -10,7 +10,7 @@ from conftest import TEST_ADMIN_USERNAME, TEST_USERNAME
 from fastapi.testclient import TestClient
 
 from openaec_reports.api import app
-from openaec_reports.auth.api_keys import generate_api_key, hash_api_key
+from openaec_reports.auth.api_keys import API_KEY_PREFIX, generate_api_key, hash_api_key
 from openaec_reports.auth.dependencies import get_api_key_db, get_user_db
 from openaec_reports.auth.models import User, UserRole
 from openaec_reports.auth.security import hash_password
@@ -36,9 +36,10 @@ class TestGenerateApiKey:
         assert key.startswith("oaec_k_")
 
     def test_key_has_sufficient_length(self):
-        """Key is lang genoeg (prefix + 64 hex chars = 70 chars)."""
+        """Key is lang genoeg (prefix + 64 hex chars)."""
         key = generate_api_key()
-        assert len(key) == 6 + 64  # "oaec_k_" + 32 bytes hex
+        assert key.startswith(API_KEY_PREFIX)
+        assert len(key) == len(API_KEY_PREFIX) + 64  # "oaec_k_" + 32 bytes hex
 
     def test_keys_are_unique(self):
         """Twee gegenereerde keys zijn verschillend."""
