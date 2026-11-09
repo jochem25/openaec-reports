@@ -13,8 +13,6 @@ from pathlib import Path
 import pytest
 
 from openaec_reports.brand_api import (
-    SESSIONS_DIR,
-    BrandSession,
     cleanup_stale_sessions,
 )
 

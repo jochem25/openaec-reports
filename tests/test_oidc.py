@@ -32,7 +32,6 @@ from openaec_reports.auth.oidc import (
 )
 from openaec_reports.auth.security import hash_password
 
-
 # ============================================================
 # Fixtures
 # ============================================================
@@ -302,7 +301,9 @@ class TestMeEndpointWithAuthentik:
         from openaec_reports.api import app
 
         client = TestClient(app)
-        r = client.get("/api/auth/me", headers=_headers(**{HEADER_USERNAME: f"hdr-{uuid.uuid4().hex[:6]}"}))
+        r = client.get(
+            "/api/auth/me", headers=_headers(**{HEADER_USERNAME: f"hdr-{uuid.uuid4().hex[:6]}"})
+        )
         assert r.status_code == 200
         body = r.json()
         assert "user" in body

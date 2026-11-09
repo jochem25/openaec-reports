@@ -40,7 +40,7 @@ _REF_RE = re.compile(r"^\$(colors|fonts)\.([A-Za-z0-9_]+)$")
 
 def resolve_refs(
     value: Any,
-    brand: "BrandConfig",
+    brand: BrandConfig,
     *,
     tenant: str = "",
     source: str = "",

@@ -184,11 +184,9 @@ def _apply_flow_layout(
     """
     from dataclasses import replace
 
-    from reportlab.pdfbase.pdfmetrics import stringWidth
 
     # Splits content vs footer text zones
     content_tz = [z for z in text_zones if z.y_mm < footer_y_mm]
-    footer_tz = [z for z in text_zones if z.y_mm >= footer_y_mm]
 
     if not content_tz:
         return text_zones, line_zones, image_zones
@@ -555,8 +553,9 @@ def _fetch_pdok_map(map_config: dict[str, Any], zone: ImageZone) -> str | None:
     height_px = max(int(zone.height_mm * 150 / 25.4), 600)
 
     try:
-        from openaec_reports.data.kadaster import KadasterClient
         import requests as req
+
+        from openaec_reports.data.kadaster import KadasterClient
 
         client = KadasterClient()
         x, y = client.wgs84_to_rd(lat, lon)

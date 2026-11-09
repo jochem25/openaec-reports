@@ -283,7 +283,10 @@ class TestRealTenantIntegration:
         assert "blank" in names
 
     @pytest.mark.skip(
-        reason="default tenant fixtures incomplete post-purge (verwachte tenant-specifieke brand slug/kleur)"
+        reason=(
+            "default tenant fixtures incomplete post-purge "
+            "(verwachte tenant-specifieke brand slug/kleur)"
+        )
     )
     def test_brand_loader_real_tenant(self):
         """BrandLoader met echte tenant dir laadt tenant brand."""
@@ -294,7 +297,10 @@ class TestRealTenantIntegration:
         assert brand.colors.get("primary") == "#40124A"
 
     @pytest.mark.skip(
-        reason="default tenant fixtures incomplete post-purge (verwachte tenant-specifieke brand slug)"
+        reason=(
+            "default tenant fixtures incomplete post-purge "
+            "(verwachte tenant-specifieke brand slug)"
+        )
     )
     def test_brand_list_real_tenant(self):
         """BrandLoader list_brands met echte tenant → tenant + default."""

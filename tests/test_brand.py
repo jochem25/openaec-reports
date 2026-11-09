@@ -132,7 +132,10 @@ class TestBrandLoader:
         assert types == ["line", "text", "text"]
 
     @pytest.mark.skip(
-        reason="default tenant fixtures incomplete post-purge (verwachte tenant-specifieke brand assertions)"
+        reason=(
+            "default tenant fixtures incomplete post-purge "
+            "(verwachte tenant-specifieke brand assertions)"
+        )
     )
     def test_load_tenant_brand(self):
         loader = BrandLoader()

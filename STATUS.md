@@ -1,13 +1,14 @@
 # STATUS — openaec-reports
 
-**Laatste update:** 2026-09-29 | **Productie:** [`report.open-aec.com`](https://report.open-aec.com)
+**Laatste update:** 2026-11-09 | **Productie:** [`report.open-aec.com`](https://report.open-aec.com)
 **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md) | **Git history:** `git log --oneline -30`
 
 ---
 
 ## Huidige staat
 
-- **Tests:** 1358 collected (1256 passed, 92 skipped, 10 pre-existing failures — zie git-history) — Python backend
+- **Tests:** 1451 collected (1331 passed, 92 skipped, 28 bekende failures, zie TODO CI-1) — Python backend, gemeten 09-11-2026
+- **CI (main):** ruff groen sinds 09-11-2026 (32 meldingen opgeschoond, O-2026-11-09-06); pytest-stap: zie TODO CI-1
 - **Rust tests:** 197 totaal (9 phases compleet, deploy van Rust server wacht op subdomein `report-rs.open-aec.com`)
 - **Productie:** multi-tenant via bind-mount `/opt/openaec/reports-tenants/`, SSO-only via Authentik
 - **Engines live:** V1 (`/api/generate`), V2 (`/api/generate/v2`), V3 (`/api/generate/template`)

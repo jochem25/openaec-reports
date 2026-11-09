@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 from openaec_reports.core.template_config import (
     ImageZone,
     LineZone,
@@ -110,7 +108,10 @@ class TestSingleRowOverflow:
         ]
 
         # Tekst die lang genoeg is om te wrappen in 83mm bij 10pt Helvetica
-        long_text = "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel past bij 83mm breedte en 10pt font"
+        long_text = (
+            "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel "
+            "past bij 83mm breedte en 10pt font"
+        )
         data = {"desc": long_text, "val2": "kort", "val3": "kort"}
 
         new_tz, _, _ = _apply_flow_layout(
@@ -141,7 +142,10 @@ class TestMultipleOverflows:
             _tz("val3", 52.4, max_width_mm=83),
         ]
 
-        long_text = "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel past bij 83mm breedte en 10pt font"
+        long_text = (
+            "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel "
+            "past bij 83mm breedte en 10pt font"
+        )
         data = {"desc1": long_text, "desc2": long_text, "val3": "kort"}
 
         new_tz, _, _ = _apply_flow_layout(
@@ -164,10 +168,15 @@ class TestFooterExcluded:
             _tz("_static.Label2", 48.4),
             # Footer zones
             TextZone(bind="client.name", x_mm=10.3, y_mm=275.4, font="heading", size=10),
-            TextZone(bind="_page_number", x_mm=172.0, y_mm=275.4, font="heading", size=12, align="right"),
+            TextZone(
+                bind="_page_number", x_mm=172.0, y_mm=275.4, font="heading", size=12, align="right"
+            ),
         ]
 
-        long_text = "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel past bij 83mm breedte"
+        long_text = (
+            "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel "
+            "past bij 83mm breedte"
+        )
         data = {"desc": long_text, "client": {"name": "TestBV"}}
 
         new_tz, _, _ = _apply_flow_layout(
@@ -194,7 +203,10 @@ class TestLineZonesShift:
             _lz(88.55),  # onder de overflow → moet verschuiven als er overflow is
         ]
 
-        long_text = "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel past bij 83mm breedte en 10pt font"
+        long_text = (
+            "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel "
+            "past bij 83mm breedte en 10pt font"
+        )
         data = {"desc": long_text}
 
         _, new_lz, _ = _apply_flow_layout(
@@ -221,7 +233,10 @@ class TestImageZonesShift:
             _iz("foto", 157.0),
         ]
 
-        long_text = "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel past bij 83mm breedte en 10pt font"
+        long_text = (
+            "Dit is een zeer lange beschrijving die absoluut niet in een enkele regel "
+            "past bij 83mm breedte en 10pt font"
+        )
         data = {"desc": long_text}
 
         _, _, new_iz = _apply_flow_layout(
@@ -373,7 +388,7 @@ class TestPaginateNoOverflow:
 
     def test_short_text_single_page(self) -> None:
         text_zones, _ = _build_page_zones(5)
-        data = {f"field": {f"val{i}": "Kort" for i in range(5)}}
+        data = {"field": {f"val{i}": "Kort" for i in range(5)}}
 
         pages = _paginate_flow_zones(
             text_zones, [], [], data, _make_brand(), FOOTER_Y,

@@ -806,7 +806,7 @@ class CoverGenerator:
 
     @staticmethod
     def _wrap_by_width(
-        text: str, max_w: float, width_of: "callable[[str], float]"
+        text: str, max_w: float, width_of: callable[[str], float]
     ) -> list[str]:
         """Woordterugloop op basis van een breedte-meetfunctie.
 
@@ -829,7 +829,7 @@ class CoverGenerator:
         return lines or [text]
 
     def _draw_cover_title(
-        self, c: "rl_canvas.Canvas", tf: dict, title_text: str,
+        self, c: rl_canvas.Canvas, tf: dict, title_text: str,
         color_hex: str, page_w: float,
     ) -> float:
         """Teken de cover-titel met woordterugloop, naar BENEDEN uitgelijnd.

@@ -219,7 +219,7 @@ app.include_router(project_router)
 app.include_router(report_router)
 
 # Cloud storage routes (Nextcloud WebDAV) — alleen als geconfigureerd
-from openaec_reports.cloud import cloud_router, is_cloud_configured
+from openaec_reports.cloud import cloud_router, is_cloud_configured  # noqa: E402
 
 if is_cloud_configured():
     app.include_router(cloud_router)
@@ -746,7 +746,10 @@ async def upload_file(file: UploadFile = File(...)):
     if len(content) > _MAX_UPLOAD_SIZE:
         raise HTTPException(
             status_code=413,
-            detail=f"Bestand te groot ({len(content)} bytes). Maximum: {_MAX_UPLOAD_SIZE} bytes (10 MB)",
+            detail=(
+                f"Bestand te groot ({len(content)} bytes). "
+                f"Maximum: {_MAX_UPLOAD_SIZE} bytes (10 MB)"
+            ),
         )
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 # TODO — openaec-reports
 
-**Laatst bijgewerkt:** 2026-09-28 (BVP E1-E9 klaar) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
+**Laatst bijgewerkt:** 2026-11-09 (CI ruff opgeschoond) | **Status:** [`STATUS.md`](STATUS.md) | **Archief:** [`archief/2026-Q1-voltooid.md`](archief/2026-Q1-voltooid.md)
 
 > Legenda: 🔴 Blocker | 🟡 Middel | 🟢 Nice-to-have
 > Voltooid werk is verplaatst naar `archief/2026-Q1-voltooid.md` (1 apr 2026). Deze file bevat alleen open items.
@@ -36,6 +36,7 @@ ADVIES", tekstextractie blijft aaneengesloten ondanks `char_space`-letterspacing
 - [ ] **CR-H3** 6+ bare `except Exception: pass` — MemoryError/TypeError worden onzichtbaar ingeslikt. Fix: specifieke exceptions vangen, altijd loggen. **Bestanden:** `modules/yaml_module.py:673,802`, `template_engine.py:130,434,509`, `auth/dependencies.py:254`
 - [ ] **CR-H4** God files: `api.py` (890+), `admin/routes.py` (1776+), `renderer_v2.py` (2191+). Split: api → generate/pdok/templates; admin → users/tenants/brands; renderer_v2 → builder/page_renderer/font_manager package
 - [ ] **CR-H5** 10+ modules zonder tests — prioriteit `cloud.py` (security-gevoelig), `brand_api.py`, `data_transform.py`. Ook: `map_generator.py`, `title_block.py`, `base_report.py`, `visual_diff.py`, `pattern_detector.py`, `page_classifier.py`, `config_generator.py`, `diff_engine.py`, `pdf_extractor.py`, `auth/seed.py`
+- [ ] **CI-1** CI op main: ruff is groen (09-11-2026), maar de pytest-stap draait nu voor het eerst sinds 10-07. Lokaal 28 bekende failures (symitech-tenant en `test_tenant_paths` leunen op prive-tenants buiten git; overige: special_pages, from_json, api_keys, scaffold). Fix: fixtures of `skipif` op ontbrekende tenant, rest per test beoordelen. **Bestand:** `tests/`
 - [ ] **CR-H7** Geen Docker layer caching in CI — elke build ~5-10 min from scratch. Fix: `cache-from: type=gha` + `cache-to: type=gha,mode=max`. **Bestand:** `.github/workflows/ci.yml:68-76`
 - [ ] **CR-H8** Frontend: Object URL memory leak bij herhaald PDF genereren — revoke is fragiel (regex replace op hash), geen unmount cleanup. Fix: raw blob URL apart bewaren, altijd revoke, cleanup in store. **Bestand:** `frontend/src/stores/apiStore.ts:182-184`
 - [ ] **CR-H11** Temp files lekken bij PDOK kaart — `NamedTemporaryFile(delete=False, prefix="pdok_")` nooit opgeruimd. Fix: cleanup-mechanisme of context manager. **Bestand:** `core/template_engine.py:579-585`

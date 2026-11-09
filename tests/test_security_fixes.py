@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +11,6 @@ from openaec_reports.api import app
 from openaec_reports.core.brand import BrandLoader
 from openaec_reports.core.template_loader import TemplateLoader
 from openaec_reports.storage.models import ReportDB
-
 
 # ============================================================
 # SEC-K1: _resolve_path() tenant isolatie
@@ -331,6 +326,7 @@ class TestSecK5BrandSessionIsolation:
     def test_verify_owner_rejects_other_user(self):
         """verify_owner faalt voor een andere user."""
         from fastapi import HTTPException
+
         from openaec_reports.brand_api import BrandSession
 
         session_id = uuid.uuid4().hex[:12]

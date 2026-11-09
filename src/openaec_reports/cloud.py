@@ -438,7 +438,7 @@ async def save_report_to_cloud(
     Always writes to the new path (reports/), then updates project.wefc.
     """
     # Import here to avoid circular imports
-    from openaec_reports.api import _generate_and_respond, _resolve_brand_with_tenant_check
+    from openaec_reports.api import _resolve_brand_with_tenant_check
     from openaec_reports.core.engine import Report
 
     data = await request.json()
